@@ -12,7 +12,9 @@ export async function GET() {
   try {
     const result = await pool.query(
       `SELECT id, utility_type, property_address, unit, account_last4,
-              amount_due, due_date, email_received_at, email_subject, status
+              amount_due, due_date, email_received_at, email_subject, status,
+              qb_tag_status, qb_purchase_id, qb_class_id, qb_tagged_at,
+              is_anomaly, anomaly_baseline, anomaly_ratio
        FROM utility_bills
        WHERE amount_due IS NOT NULL AND amount_due > 0
        ORDER BY due_date ASC NULLS LAST, created_at DESC`
@@ -39,6 +41,13 @@ export async function GET() {
           : null,
         dueMonth:   filterDate ? filterDate.getUTCMonth() : null,  // 0-11
         dueYear:    filterDate ? filterDate.getUTCFullYear() : null,
+        qbTagStatus:    row.qb_tag_status || 'pending',
+        qbPurchaseId:   row.qb_purchase_id || null,
+        qbClassId:      row.qb_class_id || null,
+        qbTaggedAt:     row.qb_tagged_at,
+        isAnomaly:        row.is_anomaly || false,
+        anomalyBaseline: row.anomaly_baseline ? Number(row.anomaly_baseline) : null,
+        anomalyRatio:    row.anomaly_ratio ? Number(row.anomaly_ratio) : null,
       };
     });
 

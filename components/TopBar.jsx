@@ -1,4 +1,5 @@
 import { IconChart } from './Icons';
+import NotificationBell from './NotificationBell';
 
 export default function TopBar({
   exportCSV, onAnalytics, onAddData, toggleDark,
@@ -32,6 +33,7 @@ export default function TopBar({
         <button className="btn primary" onClick={onSync} disabled={syncing}>
           {syncing ? '⏳ Syncing…' : '↻ Sync now'}
         </button>
+        <NotificationBell />
         <button className="toggle-track" onClick={toggleDark} title="Toggle dark mode">
           <div className="toggle-thumb"></div>
         </button>

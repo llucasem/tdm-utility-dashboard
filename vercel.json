@@ -3,6 +3,14 @@
     {
       "path": "/api/sync",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/quickbooks/auto-tag-pending",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/quickbooks/monthly-report?send=true",
+      "schedule": "0 9 1 * *"
     }
   ]
 }

@@ -1,6 +1,9 @@
 import { getUtilityEmails } from '@/lib/gmail';
 import { parseEmail }       from '@/lib/parser';
 import pool                 from '@/lib/db';
+import { autoTagBatch }     from '@/lib/auto-tag';
+import { detectAnomaliesBatch } from '@/lib/anomaly-detector';
+import { createNotification } from '@/lib/notifier';
 
 export async function GET() {
   try {
@@ -70,7 +73,8 @@ export async function GET() {
            (gmail_message_id, utility_type, property_address, unit, account_last4,
             amount_due, due_date, email_received_at, email_subject, email_from, status)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending')
-         ON CONFLICT (gmail_message_id) DO NOTHING`,
+         ON CONFLICT (gmail_message_id) DO NOTHING
+         RETURNING id, property_address`,
         [
           email.id,
           parsed.utility_type  || 'other',
@@ -88,7 +92,7 @@ export async function GET() {
       if (res.rowCount === 0) {
         results.push({ id: email.id, status: 'skipped', reason: 'ya procesado' });
       } else {
-        results.push({ id: email.id, status: 'saved', data: parsed });
+        results.push({ id: email.id, status: 'saved', data: parsed, billId: res.rows[0].id, hasProperty: !!res.rows[0].property_address });
       }
 
       // Pausa entre llamadas a Claude para no exceder el límite de velocidad
@@ -99,7 +103,56 @@ export async function GET() {
     const skipped = results.filter(r => r.status === 'skipped').length;
     const errors  = results.filter(r => r.status === 'error').length;
 
-    return Response.json({ ok: true, saved, skipped, errors, results });
+    // Auto-tag in QuickBooks any new bills that already have a property assigned.
+    // Bills without property are skipped here and will be auto-tagged when Jake assigns them.
+    const newBillIds = results
+      .filter(r => r.status === 'saved')
+      .map(r => r.billId);
+    const billIdsToTag = results
+      .filter(r => r.status === 'saved' && r.hasProperty)
+      .map(r => r.billId);
+
+    let autoTagStats = null;
+    if (billIdsToTag.length > 0) {
+      try {
+        autoTagStats = await autoTagBatch(billIdsToTag);
+      } catch (e) {
+        autoTagStats = { error: e.message };
+        await createNotification({
+          type:    'error',
+          title:   'Auto-tag failed during sync',
+          message: `Could not run auto-tag: ${e.message}. New bills were saved but not tagged in QuickBooks.`,
+        });
+      }
+    }
+
+    // Anomaly detection on every new bill — does its own notifications when it finds something
+    let anomalyStats = null;
+    if (newBillIds.length > 0) {
+      try {
+        anomalyStats = await detectAnomaliesBatch(newBillIds);
+      } catch (e) {
+        anomalyStats = { error: e.message };
+      }
+    }
+
+    // One summary notification per sync run
+    if (saved > 0 || errors > 0) {
+      const parts = [`${saved} new bills`];
+      if (errors > 0) parts.push(`${errors} parse errors`);
+      if (autoTagStats?.tagged)    parts.push(`${autoTagStats.tagged} tagged in QB`);
+      if (autoTagStats?.ambiguous) parts.push(`${autoTagStats.ambiguous} ambiguous`);
+      if (autoTagStats?.error)     parts.push(`${autoTagStats.error} tag errors`);
+
+      await createNotification({
+        type:    errors > 0 || autoTagStats?.error > 0 ? 'warning' : (saved > 0 ? 'success' : 'info'),
+        title:   `Sync complete · ${saved} new bills`,
+        message: parts.join(' · '),
+        metadata: { saved, errors, autoTag: autoTagStats },
+      });
+    }
+
+    return Response.json({ ok: true, saved, skipped, errors, results, autoTag: autoTagStats });
 
   } catch (error) {
     console.error('[sync] Error:', error.message);

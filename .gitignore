@@ -35,3 +35,6 @@ deep-progress.log
 
 # Old client data exports
 Utilities backup - Sheet1.csv
+
+# Local DB backups — kept out of the repo because they contain client data
+backups/

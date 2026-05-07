@@ -22,6 +22,25 @@ function MatchBadge({ match }) {
   return <span className="qb-badge qb-miss" title="No match found in QuickBooks">✗</span>;
 }
 
+function TagBadge({ status }) {
+  if (status === 'tagged')    return <span className="qb-tag qb-tag-ok"   title="Tagged in QuickBooks">🏷</span>;
+  if (status === 'ambiguous') return <span className="qb-tag qb-tag-warn" title="Multiple QB matches — manual review needed">🏷?</span>;
+  if (status === 'error')     return <span className="qb-tag qb-tag-err"  title="Auto-tag error — see notifications">🏷!</span>;
+  if (status === 'not_found') return <span className="qb-tag qb-tag-miss" title="Not found in QuickBooks yet">🏷·</span>;
+  return null;
+}
+
+function AnomalyBadge({ bill }) {
+  if (!bill.isAnomaly) return null;
+  const pct = bill.anomalyRatio ? Math.round((bill.anomalyRatio - 1) * 100) : 0;
+  const baseline = bill.anomalyBaseline ? bill.anomalyBaseline.toFixed(2) : '—';
+  return (
+    <span className="anomaly-badge" title={`+${pct}% above the 6-month average ($${baseline}). Possible leak or billing error.`}>
+      ⚡
+    </span>
+  );
+}
+
 export default function BillsTable({ filtered, onSelectBill, onAssignBill, matches = {} }) {
   // Separate mapped vs unmapped bills
   const mapped   = filtered.filter(isMapped);
@@ -116,7 +135,9 @@ export default function BillsTable({ filtered, onSelectBill, onAssignBill, match
                     >
                       <span className="matrix-cell-amount">
                         {fmt(bill.amount)}
+                        <AnomalyBadge bill={bill} />
                         <MatchBadge match={matches[bill.id]} />
+                        <TagBadge status={bill.qbTagStatus} />
                       </span>
                       <span className="matrix-cell-account">·····{bill.account}</span>
                     </span>

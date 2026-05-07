@@ -1,6 +1,19 @@
 import { NextResponse } from 'next/server'
+import { rateLimit, getClientIp } from '@/lib/rate-limiter'
 
 export async function POST(request) {
+  const ip = getClientIp(request)
+
+  // Allow up to 8 login attempts per 60 seconds per IP
+  const limit = rateLimit(`login:${ip}`, { max: 8, windowMs: 60_000 })
+  if (!limit.ok) {
+    const retryAfterSec = Math.ceil(limit.retryAfter / 1000)
+    return NextResponse.json(
+      { error: `Too many login attempts. Try again in ${retryAfterSec} seconds.` },
+      { status: 429, headers: { 'Retry-After': String(retryAfterSec) } }
+    )
+  }
+
   const { password } = await request.json()
 
   if (password !== process.env.APP_PASSWORD) {

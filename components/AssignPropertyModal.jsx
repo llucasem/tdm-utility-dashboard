@@ -41,7 +41,7 @@ export default function AssignPropertyModal({ bill, properties, onClose, onAssig
       });
       const data = await res.json();
       if (data.ok) {
-        onAssigned();
+        onAssigned(data);
         handleClose();
       } else {
         setError(data.error || 'Failed to save');

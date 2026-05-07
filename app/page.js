@@ -104,9 +104,15 @@ export default function Dashboard() {
     showToast('Bill added successfully');
   };
 
-  const handleAssigned = async () => {
+  const handleAssigned = async (result) => {
     await fetchBills();
-    showToast('Bill assigned to property');
+    const bulk = result?.bulkUpdated || 0;
+    const tagStatus = result?.autoTag?.status;
+    let msg = 'Bill assigned to property';
+    if (bulk > 0) msg += ` · ${bulk} other bill${bulk === 1 ? '' : 's'} with same account also assigned`;
+    if (tagStatus === 'tagged')    msg += ' · tagged in QuickBooks';
+    if (tagStatus === 'ambiguous') msg += ' · multiple QB matches — review needed';
+    showToast(msg);
   };
 
   const handleMatchQB = async () => {
