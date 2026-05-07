@@ -38,3 +38,6 @@ Utilities backup - Sheet1.csv
 
 # Local DB backups — kept out of the repo because they contain client data
 backups/
+
+# Backfill / diagnostic logs
+backfill.log

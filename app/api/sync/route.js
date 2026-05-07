@@ -2,6 +2,7 @@ import { getUtilityEmails } from '@/lib/gmail';
 import { parseEmail }       from '@/lib/parser';
 import pool                 from '@/lib/db';
 import { autoTagBatch }     from '@/lib/auto-tag';
+import { matchBatch }       from '@/lib/qb-match';
 import { detectAnomaliesBatch } from '@/lib/anomaly-detector';
 import { createNotification } from '@/lib/notifier';
 
@@ -103,11 +104,24 @@ export async function GET() {
     const skipped = results.filter(r => r.status === 'skipped').length;
     const errors  = results.filter(r => r.status === 'error').length;
 
-    // Auto-tag in QuickBooks any new bills that already have a property assigned.
-    // Bills without property are skipped here and will be auto-tagged when Jake assigns them.
+    // QuickBooks match for ALL new bills (independent of property). The result
+    // is persisted in utility_bills.qb_match_* so the dashboard shows badges
+    // automatically and auto-tag can reuse the lookup.
     const newBillIds = results
       .filter(r => r.status === 'saved')
       .map(r => r.billId);
+
+    let matchStats = null;
+    if (newBillIds.length > 0) {
+      try {
+        matchStats = await matchBatch(newBillIds);
+      } catch (e) {
+        matchStats = { error: e.message };
+      }
+    }
+
+    // Auto-tag the ones that already have a property assigned. They will reuse
+    // the persisted match (no extra QB calls).
     const billIdsToTag = results
       .filter(r => r.status === 'saved' && r.hasProperty)
       .map(r => r.billId);
@@ -140,19 +154,21 @@ export async function GET() {
     if (saved > 0 || errors > 0) {
       const parts = [`${saved} new bills`];
       if (errors > 0) parts.push(`${errors} parse errors`);
+      if (matchStats?.matched)     parts.push(`${matchStats.matched} matched`);
+      if (matchStats?.ambiguous)   parts.push(`${matchStats.ambiguous} ambiguous`);
+      if (matchStats?.not_found)   parts.push(`${matchStats.not_found} not found`);
       if (autoTagStats?.tagged)    parts.push(`${autoTagStats.tagged} tagged in QB`);
-      if (autoTagStats?.ambiguous) parts.push(`${autoTagStats.ambiguous} ambiguous`);
       if (autoTagStats?.error)     parts.push(`${autoTagStats.error} tag errors`);
 
       await createNotification({
         type:    errors > 0 || autoTagStats?.error > 0 ? 'warning' : (saved > 0 ? 'success' : 'info'),
         title:   `Sync complete · ${saved} new bills`,
         message: parts.join(' · '),
-        metadata: { saved, errors, autoTag: autoTagStats },
+        metadata: { saved, errors, match: matchStats, autoTag: autoTagStats },
       });
     }
 
-    return Response.json({ ok: true, saved, skipped, errors, results, autoTag: autoTagStats });
+    return Response.json({ ok: true, saved, skipped, errors, results, match: matchStats, autoTag: autoTagStats });
 
   } catch (error) {
     console.error('[sync] Error:', error.message);

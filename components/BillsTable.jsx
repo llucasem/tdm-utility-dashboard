@@ -15,11 +15,15 @@ function isMapped(b) {
   return b.property && !EMPTY_VALUES.includes(b.property.trim().toLowerCase());
 }
 
-function MatchBadge({ match }) {
-  if (!match) return null;
-  if (match.count === 1) return <span className="qb-badge qb-ok" title="1 match in QuickBooks">✓</span>;
-  if (match.count > 1)   return <span className="qb-badge qb-warn" title={`${match.count} possible matches — review manually`}>⚠ {match.count}</span>;
-  return <span className="qb-badge qb-miss" title="No match found in QuickBooks">✗</span>;
+function MatchBadge({ bill }) {
+  const status = bill.qbMatchStatus;
+  const count  = bill.qbMatchCount || 0;
+  if (!status || status === 'pending' || status === 'skipped') return null;
+  if (status === 'matched')   return <span className="qb-badge qb-ok"   title="1 match in QuickBooks">✓</span>;
+  if (status === 'ambiguous') return <span className="qb-badge qb-warn" title={`${count} possible matches — review manually`}>⚠ {count}</span>;
+  if (status === 'not_found') return <span className="qb-badge qb-miss" title="No match found in QuickBooks">✗</span>;
+  if (status === 'error')     return <span className="qb-badge qb-err"  title="QuickBooks lookup error — will retry">!</span>;
+  return null;
 }
 
 function TagBadge({ status }) {
@@ -41,7 +45,7 @@ function AnomalyBadge({ bill }) {
   );
 }
 
-export default function BillsTable({ filtered, onSelectBill, onAssignBill, matches = {} }) {
+export default function BillsTable({ filtered, onSelectBill, onAssignBill }) {
   // Separate mapped vs unmapped bills
   const mapped   = filtered.filter(isMapped);
   const unmapped = filtered.filter(b => !isMapped(b));
@@ -136,7 +140,7 @@ export default function BillsTable({ filtered, onSelectBill, onAssignBill, match
                       <span className="matrix-cell-amount">
                         {fmt(bill.amount)}
                         <AnomalyBadge bill={bill} />
-                        <MatchBadge match={matches[bill.id]} />
+                        <MatchBadge bill={bill} />
                         <TagBadge status={bill.qbTagStatus} />
                       </span>
                       <span className="matrix-cell-account">·····{bill.account}</span>
@@ -176,7 +180,7 @@ export default function BillsTable({ filtered, onSelectBill, onAssignBill, match
             >
               <span className="matrix-unmapped-type">{bill.type}</span>
               <span className="mono">·····{bill.account}</span>
-              <span className="mono">{fmt(bill.amount)} <MatchBadge match={matches[bill.id]} /></span>
+              <span className="mono">{fmt(bill.amount)} <MatchBadge bill={bill} /></span>
               <span className="matrix-unmapped-due">{bill.due}</span>
               <span style={{ color: 'var(--accent)', fontSize: 11, marginLeft: 'auto' }}>+ Assign →</span>
             </div>

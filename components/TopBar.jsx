@@ -4,7 +4,6 @@ import NotificationBell from './NotificationBell';
 export default function TopBar({
   exportCSV, onAnalytics, onAddData, toggleDark,
   onSync, syncing, lastSynced,
-  onMatchQB, matchingQB, qbConnected,
 }) {
   return (
     <div className="topbar">
@@ -22,14 +21,6 @@ export default function TopBar({
           <IconChart /> Analytics
         </button>
         <button className="btn" onClick={onAddData}>+ Add data</button>
-        <button
-          className="btn"
-          onClick={onMatchQB}
-          disabled={matchingQB || !qbConnected}
-          title={qbConnected ? 'Match payments with QuickBooks' : 'QuickBooks not connected yet'}
-        >
-          {matchingQB ? '⏳ Matching…' : '⇆ Match QB'}
-        </button>
         <button className="btn primary" onClick={onSync} disabled={syncing}>
           {syncing ? '⏳ Syncing…' : '↻ Sync now'}
         </button>

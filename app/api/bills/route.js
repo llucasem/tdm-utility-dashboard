@@ -14,6 +14,7 @@ export async function GET() {
       `SELECT id, utility_type, property_address, unit, account_last4,
               amount_due, due_date, email_received_at, email_subject, status,
               qb_tag_status, qb_purchase_id, qb_class_id, qb_tagged_at,
+              qb_match_status, qb_match_count, qb_match_data, qb_matched_at,
               is_anomaly, anomaly_baseline, anomaly_ratio
        FROM utility_bills
        WHERE amount_due IS NOT NULL AND amount_due > 0
@@ -45,6 +46,10 @@ export async function GET() {
         qbPurchaseId:   row.qb_purchase_id || null,
         qbClassId:      row.qb_class_id || null,
         qbTaggedAt:     row.qb_tagged_at,
+        qbMatchStatus:  row.qb_match_status || 'pending',
+        qbMatchCount:   row.qb_match_count || 0,
+        qbMatchData:    row.qb_match_data || [],
+        qbMatchedAt:    row.qb_matched_at,
         isAnomaly:        row.is_anomaly || false,
         anomalyBaseline: row.anomaly_baseline ? Number(row.anomaly_baseline) : null,
         anomalyRatio:    row.anomaly_ratio ? Number(row.anomaly_ratio) : null,

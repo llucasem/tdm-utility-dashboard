@@ -1,6 +1,6 @@
 import { fmt } from '@/lib/utils';
 
-export default function BillDetailModal({ bill, onClose, year, match }) {
+export default function BillDetailModal({ bill, onClose, year }) {
   return (
     <div
       className={`overlay ${bill ? 'show' : ''}`}
@@ -35,22 +35,35 @@ export default function BillDetailModal({ bill, onClose, year, match }) {
             </div>
           </div>
 
-          {match && (
+          {bill.qbMatchStatus && bill.qbMatchStatus !== 'pending' && bill.qbMatchStatus !== 'skipped' && (
             <div className="qb-match-block">
-              <label>QuickBooks match</label>
-              {match.count === 0 && (
+              <label>
+                QuickBooks match
+                {bill.qbMatchedAt && (
+                  <span style={{ color: 'var(--text3)', fontStyle: 'italic', marginLeft: 8 }}>
+                    · checked {new Date(bill.qbMatchedAt).toLocaleDateString()}
+                  </span>
+                )}
+              </label>
+
+              {bill.qbMatchStatus === 'not_found' && (
                 <p className="qb-match-empty">No matching transaction found in QuickBooks (±15 days).</p>
               )}
-              {match.count >= 1 && (
+
+              {bill.qbMatchStatus === 'error' && (
+                <p className="qb-match-warn">Lookup error — will retry tomorrow.</p>
+              )}
+
+              {(bill.qbMatchStatus === 'matched' || bill.qbMatchStatus === 'ambiguous') && (
                 <>
-                  {match.count > 1 && (
-                    <p className="qb-match-warn">⚠ {match.count} possible matches — review manually.</p>
+                  {bill.qbMatchStatus === 'ambiguous' && (
+                    <p className="qb-match-warn">⚠ {bill.qbMatchCount} possible matches — review manually.</p>
                   )}
                   <ul className="qb-match-list">
-                    {match.matches.map(m => (
+                    {(bill.qbMatchData || []).map(m => (
                       <li key={`${m.type}-${m.id}`}>
                         <span className="qb-match-date">{m.date}</span>
-                        <span className="qb-match-amount">{fmt(m.amount)}</span>
+                        <span className="qb-match-amount">{fmt(Number(m.amount))}</span>
                         <span className="qb-match-payee">{m.payee || m.account || '—'}</span>
                         <span className="qb-match-type">{m.type}</span>
                       </li>

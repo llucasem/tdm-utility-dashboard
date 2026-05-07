@@ -28,9 +28,6 @@ export default function Dashboard() {
   const [addOpen,         setAddOpen]         = useState(false);
   const [syncing,         setSyncing]         = useState(false);
   const [lastSynced,      setLastSynced]      = useState('');
-  const [matchingQB,      setMatchingQB]      = useState(false);
-  const [qbConnected,     setQbConnected]     = useState(false);
-  const [matches,         setMatches]         = useState({}); // { billId: { count, matches[] } }
 
   const fetchBills = async () => {
     const res  = await fetch('/api/bills');
@@ -44,16 +41,8 @@ export default function Dashboard() {
     if (data.ok) setProperties(data.properties);
   };
 
-  const fetchQBStatus = async () => {
-    try {
-      const res  = await fetch('/api/quickbooks/status');
-      const data = await res.json();
-      if (data.ok && data.connected) setQbConnected(true);
-    } catch {}
-  };
-
   useEffect(() => {
-    Promise.all([fetchBills(), fetchProperties(), fetchQBStatus()])
+    Promise.all([fetchBills(), fetchProperties()])
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -113,39 +102,6 @@ export default function Dashboard() {
     if (tagStatus === 'tagged')    msg += ' · tagged in QuickBooks';
     if (tagStatus === 'ambiguous') msg += ' · multiple QB matches — review needed';
     showToast(msg);
-  };
-
-  const handleMatchQB = async () => {
-    if (!qbConnected) {
-      showToast('QuickBooks not connected yet');
-      return;
-    }
-    setMatchingQB(true);
-    try {
-      const billIds = filtered.map(b => b.id);
-      if (billIds.length === 0) {
-        showToast('No bills in this view to match');
-        return;
-      }
-      const res  = await fetch('/api/quickbooks/match', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ billIds }),
-      });
-      const data = await res.json();
-      if (data.ok) {
-        setMatches(prev => ({ ...prev, ...data.results }));
-        const matched = Object.values(data.results).filter(r => r.count >= 1).length;
-        const ambig   = Object.values(data.results).filter(r => r.count >  1).length;
-        showToast(`Matched ${matched}/${billIds.length}${ambig ? ` — ${ambig} need review` : ''}`);
-      } else {
-        showToast(`Match failed — ${data.error || 'unknown error'}`);
-      }
-    } catch (e) {
-      showToast(`Match failed — ${e.message}`);
-    } finally {
-      setMatchingQB(false);
-    }
   };
 
   const handleSync = async () => {
@@ -213,9 +169,6 @@ export default function Dashboard() {
         onSync={handleSync}
         syncing={syncing}
         lastSynced={lastSynced}
-        onMatchQB={handleMatchQB}
-        matchingQB={matchingQB}
-        qbConnected={qbConnected}
       />
       <StatsRow monthBills={monthBills} prevMonthBills={prevMonthBills} />
       <FiltersBar
@@ -230,7 +183,6 @@ export default function Dashboard() {
         filtered={filtered}
         onSelectBill={setSelectedBill}
         onAssignBill={setAssignBill}
-        matches={matches}
       />
 
       <div className={`toast ${toast ? 'show' : ''}`}>{toastMsg}</div>
@@ -239,7 +191,6 @@ export default function Dashboard() {
         bill={selectedBill}
         onClose={() => setSelectedBill(null)}
         year={year}
-        match={selectedBill ? matches[selectedBill.id] : null}
       />
       <AddBillModal
         open={addOpen}
