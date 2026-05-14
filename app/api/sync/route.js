@@ -6,6 +6,12 @@ import { matchBatch }       from '@/lib/qb-match';
 import { detectAnomaliesBatch } from '@/lib/anomaly-detector';
 import { createNotification } from '@/lib/notifier';
 
+// Vercel function timeout — bumped from the default 10s. On Hobby plan the
+// max is 60s; on Pro this can go up to 300s. The pre-filter in lib/gmail.js
+// caps each invocation at 30 new emails so we comfortably fit in 60s even
+// when there's a backlog.
+export const maxDuration = 60;
+
 export async function GET() {
   try {
     const emails = await getUtilityEmails();
