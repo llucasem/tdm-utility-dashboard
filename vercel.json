@@ -5,20 +5,8 @@
       "schedule": "0 8 * * *"
     },
     {
-      "path": "/api/quickbooks/match-pending",
+      "path": "/api/cron/retry-and-learn",
       "schedule": "0 2 * * *"
-    },
-    {
-      "path": "/api/quickbooks/learn-from-classes",
-      "schedule": "30 2 * * *"
-    },
-    {
-      "path": "/api/quickbooks/auto-tag-pending",
-      "schedule": "0 3 * * *"
-    },
-    {
-      "path": "/api/quickbooks/monthly-report?send=true",
-      "schedule": "0 9 1 * *"
     }
   ]
 }
