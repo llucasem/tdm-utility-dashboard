@@ -13,6 +13,7 @@ export default function AddBillModal({ open, onClose, onSave, properties = [], o
   const [billForm,   setBillForm]   = useState(EMPTY_BILL);
   const [propForm,   setPropForm]   = useState(EMPTY_PROP);
   const [billError,  setBillError]  = useState('');
+  const [billSaving, setBillSaving] = useState(false);
   const [propError,  setPropError]  = useState('');
   const [propSaving, setPropSaving] = useState(false);
   const [propSaved,  setPropSaved]  = useState(false);
@@ -27,7 +28,7 @@ export default function AddBillModal({ open, onClose, onSave, properties = [], o
     onClose();
   };
 
-  const handleSaveBill = () => {
+  const handleSaveBill = async () => {
     if (!billForm.amount || !billForm.due || !billForm.property) {
       setBillError('Please fill in property, amount, and due date.');
       return;
@@ -37,25 +38,36 @@ export default function AddBillModal({ open, onClose, onSave, properties = [], o
       setBillError('Amount must be a positive number.');
       return;
     }
-    let dueFormatted = billForm.due;
-    if (billForm.due.includes('-')) {
-      const d   = new Date(billForm.due + 'T12:00:00');
-      const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()];
-      dueFormatted = `${mon} ${d.getDate()}`;
-    }
-    onSave({
-      id:       Date.now(),
-      type:     billForm.type,
-      property: billForm.property,
-      unit:     billForm.unit    || '—',
-      account:  billForm.account || '0000',
-      amount:   parsedAmount,
-      due:      dueFormatted,
-      status:   billForm.status,
-    });
-    setBillForm(EMPTY_BILL);
+
+    setBillSaving(true);
     setBillError('');
-    onClose();
+    try {
+      const res = await fetch('/api/bills', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          utility_type:     billForm.type,
+          property_address: billForm.property,
+          unit:             billForm.unit    || null,
+          account_last4:    billForm.account || null,
+          amount_due:       parsedAmount,
+          due_date:         billForm.due,    // YYYY-MM-DD from <input type="date">
+          status:           billForm.status,
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        setBillError(data.error || 'Failed to save');
+        return;
+      }
+      onSave(data.bill);
+      setBillForm(EMPTY_BILL);
+      onClose();
+    } catch {
+      setBillError('Network error — please try again');
+    } finally {
+      setBillSaving(false);
+    }
   };
 
   const handleSaveProperty = async () => {
@@ -187,7 +199,9 @@ export default function AddBillModal({ open, onClose, onSave, properties = [], o
               {billError && <p className="form-error">{billError}</p>}
               <div className="modal-footer">
                 <button className="btn" onClick={handleClose}>Cancel</button>
-                <button className="btn primary" onClick={handleSaveBill}>Save bill</button>
+                <button className="btn primary" onClick={handleSaveBill} disabled={billSaving}>
+                  {billSaving ? 'Saving…' : 'Save bill'}
+                </button>
               </div>
             </>
           )}

@@ -239,16 +239,16 @@ export default function AdminMappings() {
     }
   };
 
-  const handleDismiss = async (index) => {
-    setDismissing(prev => ({ ...prev, [index]: true }));
+  const handleDismiss = async (flagId) => {
+    setDismissing(prev => ({ ...prev, [flagId]: true }));
     try {
-      const res  = await fetch(`/api/review-flags?index=${index}`, { method: 'DELETE' });
+      const res  = await fetch(`/api/review-flags?id=${flagId}`, { method: 'DELETE' });
       const data = await res.json();
       if (data.ok) {
-        setFlags(prev => prev.filter((_, i) => i !== index));
+        setFlags(prev => prev.filter(f => f.id !== flagId));
       }
     } finally {
-      setDismissing(prev => ({ ...prev, [index]: false }));
+      setDismissing(prev => ({ ...prev, [flagId]: false }));
     }
   };
 
@@ -297,12 +297,12 @@ export default function AdminMappings() {
             <p style={{ color: 'var(--text-muted)', fontSize: 13, marginBottom: 16 }}>
               These accounts couldn't be mapped automatically and need manual action.
             </p>
-            {flags.map((f, i) => (
+            {flags.map(f => (
               <FlagCard
-                key={i}
+                key={f.id}
                 flag={f}
-                onDismiss={() => handleDismiss(i)}
-                dismissing={dismissing[i]}
+                onDismiss={() => handleDismiss(f.id)}
+                dismissing={dismissing[f.id]}
               />
             ))}
           </section>
