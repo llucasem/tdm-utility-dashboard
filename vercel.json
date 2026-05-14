@@ -9,6 +9,10 @@
       "schedule": "0 2 * * *"
     },
     {
+      "path": "/api/quickbooks/learn-from-classes",
+      "schedule": "30 2 * * *"
+    },
+    {
       "path": "/api/quickbooks/auto-tag-pending",
       "schedule": "0 3 * * *"
     },

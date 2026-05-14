@@ -16,8 +16,8 @@ export default function Dashboard() {
   const [bills,           setBills]           = useState([]);
   const [properties,      setProperties]      = useState([]);
   const [loading,         setLoading]         = useState(true);
-  const [monthIndex,      setMonthIndex]      = useState(3);
-  const [year,            setYear]            = useState(2026);
+  const [monthIndex,      setMonthIndex]      = useState(() => new Date().getMonth());
+  const [year,            setYear]            = useState(() => new Date().getFullYear());
   const [search,          setSearch]          = useState('');
   const [selectedBill,    setSelectedBill]    = useState(null);
   const [assignBill,      setAssignBill]      = useState(null);
