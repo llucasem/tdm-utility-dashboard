@@ -254,6 +254,102 @@ if (disagreements.length > 0) {
   }
 }
 
+// ── STEP 3: in-app notifications (so Jake sees the result in the bell) ────
+console.log('\n═══════════════════════════════════════════════════════════════════');
+console.log('  STEP 3: creating in-app notifications');
+console.log('═══════════════════════════════════════════════════════════════════\n');
+
+// Find properties that have bills but no Class mapping (need manual review)
+const unmappedR = await pool.query(`
+  SELECT b.property_address, COALESCE(b.unit, '') AS unit, COUNT(*)::int AS bill_count
+  FROM utility_bills b
+  WHERE b.property_address IS NOT NULL
+    AND TRIM(b.property_address) != ''
+    AND b.amount_due > 0
+    AND NOT EXISTS (
+      SELECT 1 FROM property_qb_class p
+      WHERE p.property_address = b.property_address
+        AND COALESCE(p.unit, '') = COALESCE(b.unit, '')
+    )
+  GROUP BY b.property_address, COALESCE(b.unit, '')
+  ORDER BY bill_count DESC, b.property_address
+`);
+const unmapped = unmappedR.rows;
+
+const mappedCountR = await pool.query(`SELECT COUNT(*)::int AS n FROM property_qb_class`);
+const totalMapped = mappedCountR.rows[0].n;
+
+const totalPropsR = await pool.query(`
+  SELECT COUNT(DISTINCT (property_address, COALESCE(unit, '')))::int AS n
+  FROM utility_bills
+  WHERE property_address IS NOT NULL AND TRIM(property_address) != '' AND amount_due > 0
+`);
+const totalProps = totalPropsR.rows[0].n;
+
+// Mark any previous unread mapping summary notifications as read so the bell
+// doesn't accumulate stale duplicates each time this script is re-run.
+const dismissed = await pool.query(`
+  UPDATE notifications SET read_at = NOW()
+  WHERE read_at IS NULL
+    AND (
+      title LIKE '%mapeadas a QuickBooks Classes%' OR
+      title LIKE '%sin mapear — revisión manual%' OR
+      title LIKE '%facturas con Class distinta%'
+    )
+`);
+if (dismissed.rowCount > 0) console.log(`  · Marked ${dismissed.rowCount} previous mapping notifications as read\n`);
+
+// 1. Success notification
+await pool.query(
+  `INSERT INTO notifications (type, title, message, metadata)
+   VALUES ($1, $2, $3, $4)`,
+  [
+    'success',
+    `${totalMapped} propiedades mapeadas a QuickBooks Classes`,
+    `Mapeo completado: ${totalMapped} de ${totalProps} propiedades+unidades ya están asociadas a su Class de QuickBooks. Cuando llegue una factura nueva de cualquiera de estas, se etiquetará automáticamente sin tu intervención.`,
+    JSON.stringify({ totalMapped, totalProps, mappedPct: Math.round(totalMapped / totalProps * 100) }),
+  ]
+);
+console.log(`  ✓ Created success notification: ${totalMapped}/${totalProps} mapped`);
+
+// 2. Warning notification with the list of unmapped
+if (unmapped.length > 0) {
+  const totalBillsAffected = unmapped.reduce((s, p) => s + p.bill_count, 0);
+  const list = unmapped.map(p => {
+    const u = p.unit ? ` · ${p.unit}` : '';
+    return `${p.property_address.split(',')[0]}${u} (${p.bill_count} facturas)`;
+  }).join(' · ');
+
+  await pool.query(
+    `INSERT INTO notifications (type, title, message, metadata)
+     VALUES ($1, $2, $3, $4)`,
+    [
+      'warning',
+      `${unmapped.length} propiedades sin mapear — revisión manual`,
+      `Estas propiedades tienen facturas pero no se han podido emparejar automáticamente con una Class de QuickBooks (${totalBillsAffected} facturas afectadas). Revisar con Jake/Edonis si la Class existe con otro nombre, o si hay que crearla. Lista: ${list}`,
+      JSON.stringify({ count: unmapped.length, billsAffected: totalBillsAffected, properties: unmapped }),
+    ]
+  );
+  console.log(`  ⚠ Created warning notification: ${unmapped.length} unmapped (${totalBillsAffected} bills affected)`);
+}
+
+// 3. Info notification about disagreements (only if any)
+if (disagreesExisting > 0) {
+  await pool.query(
+    `INSERT INTO notifications (type, title, message, metadata)
+     VALUES ($1, $2, $3, $4)`,
+    [
+      'info',
+      `${disagreesExisting} facturas con Class distinta a la propuesta`,
+      `Detectamos ${disagreesExisting} Purchases en QuickBooks que ya tienen una Class asignada distinta a la que propondríamos. La mayoría son colisiones de matching (mismo importe en propiedades vecinas) — el guardrail no las tocará, pero conviene revisarlas con Jake para confirmar.`,
+      JSON.stringify({ disagreesExisting, agreesAlready, readyToTag }),
+    ]
+  );
+  console.log(`  ℹ Created info notification: ${disagreesExisting} disagreements`);
+}
+
+console.log(`\n  → Jake las verá en la campana 🔔 al abrir el dashboard`);
+
 console.log('\n═══════════════════════════════════════════════════════════════════');
 console.log('  LISTO. En la reunión ejecuta:');
 console.log('     node scripts/run-auto-tag-batch.mjs');
