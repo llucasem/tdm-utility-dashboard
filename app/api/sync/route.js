@@ -22,18 +22,49 @@ export async function GET() {
 
     const results = [];
 
-    // Subjects that are payment confirmations, not bills — skip before calling Claude
+    // Subjects that are NOT real bills — skip before Claude burns tokens parsing them.
+    // Categories: payment confirmations, marketing/upsell, surveys, generic announcements.
+    // We err on the side of caution — only patterns we're confident are not bills.
     const SKIP_SUBJECTS = [
+      // Payment confirmations / scheduling
       'automatic monthly payment is scheduled',
+      'your payment is scheduled',
       'thanks for paying your con edison bill',
       'thank you for your payment',
+      'we\'ve received your payment',
+      'payment received (confirmation)',
+      'order confirmation',
+      'automatic payment declined',
+      // Surveys & feedback
+      'your opinion matters',
+      'values your feedback',
+      'annual survey',
+      // Marketing / upsell
+      'get internet speed',
+      'get a connection that keeps up',
+      'enhance your connection',
+      'entertainment that moves',
+      // Generic announcements that don't carry billing info
+      'california climate credit timing update',
+    ];
+
+    // Sender patterns that are marketing-only (never carry real bills)
+    const SKIP_SENDERS = [
+      'spectrum customer experience team',
+      'spectrum@exchange.spectrum',  // marketing list
     ];
 
     for (const email of emails) {
-      // Skip known payment-confirmation emails (not bills — no useful address/account info)
+      // Skip known payment-confirmation / marketing / survey emails before
+      // burning Claude tokens. See SKIP_SUBJECTS + SKIP_SENDERS above.
       const subjectLower = (email.subject || '').toLowerCase();
+      const fromLower    = (email.from    || '').toLowerCase();
       if (SKIP_SUBJECTS.some(s => subjectLower.includes(s))) {
-        results.push({ id: email.id, status: 'skipped', reason: 'payment confirmation — not a bill' });
+        results.push({ id: email.id, status: 'skipped', reason: `noise filter: subject contains "${SKIP_SUBJECTS.find(s => subjectLower.includes(s))}"` });
+        continue;
+      }
+      if (SKIP_SENDERS.some(s => fromLower.includes(s))) {
+        results.push({ id: email.id, status: 'skipped', reason: `noise filter: sender is marketing list` });
         continue;
       }
 
