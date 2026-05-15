@@ -11,9 +11,13 @@ function formatDue(dateStr) {
 }
 
 function mapBillRow(row) {
-  const dueDate    = row.due_date ? new Date(row.due_date) : null;
+  // Group bills by when the EMAIL ARRIVED, not by due date.
+  // A bill received in May is conceptually a May bill, even if it's due
+  // June 1. due_date is only used as fallback when email_received_at is
+  // missing (rare).
   const recDate    = row.email_received_at ? new Date(row.email_received_at) : null;
-  const filterDate = dueDate || recDate;
+  const dueDate    = row.due_date ? new Date(row.due_date) : null;
+  const filterDate = recDate || dueDate;
 
   return {
     id:         row.id,
@@ -59,7 +63,6 @@ export async function GET() {
 
     const bills = result.rows.map(mapBillRow);
     return Response.json({ ok: true, bills });
-
   } catch (error) {
     console.error('[bills GET]', error.message);
     return Response.json({ ok: false, error: error.message }, { status: 500 });
