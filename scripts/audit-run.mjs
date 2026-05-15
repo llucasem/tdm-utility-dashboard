@@ -126,7 +126,7 @@ console.log('\n— Status enums —');
     SELECT qb_match_status, COUNT(*)::int AS n FROM utility_bills
     GROUP BY qb_match_status ORDER BY n DESC
   `);
-  const validMatch = new Set(['pending', 'matched', 'not_found', 'ambiguous', 'error', 'skipped']);
+  const validMatch = new Set(['pending', 'matched', 'not_found', 'ambiguous', 'error', 'skipped', 'noise', 'duplicate']);
   let invalidMatchFound = false;
   for (const r of matchStatuses.rows) {
     if (r.qb_match_status && !validMatch.has(r.qb_match_status)) {

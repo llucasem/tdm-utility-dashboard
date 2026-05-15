@@ -35,6 +35,8 @@ export async function GET() {
       'payment received (confirmation)',
       'order confirmation',
       'automatic payment declined',
+      'autopay was successful',
+      'autopay payment',
       // Surveys & feedback
       'your opinion matters',
       'values your feedback',
