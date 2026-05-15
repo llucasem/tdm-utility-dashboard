@@ -1,7 +1,7 @@
 import pool from '@/lib/db';
 import { matchBatch } from '@/lib/qb-match';
 import { autoTagBatch } from '@/lib/auto-tag';
-import { runLearningPass } from '@/lib/class-learner';
+import { runLearningPass, linkBillsFromRecentClasses } from '@/lib/class-learner';
 import { createNotification } from '@/lib/notifier';
 
 // Vercel Hobby caps function timeout at 60s. We sequence multiple batches
@@ -79,7 +79,20 @@ export async function GET() {
     hadError = true;
   }
 
-  // ── 4. Monthly report (only on day 1) ────────────────────────────────
+  // ── 4. Daily mini-sync from QB Classes ───────────────────────────────
+  // Closes the loop: when Jake classes a Purchase that should link to a
+  // bill currently in pending/not_found/matched-wrong, this step links it.
+  try {
+    stats.jakeSync = await linkBillsFromRecentClasses({ sinceDays: 14 });
+    if (stats.jakeSync.linked)         summary.push(`🔗 ${stats.jakeSync.linked} bills linked from Jake`);
+    if (stats.jakeSync.relinked)       summary.push(`↻ ${stats.jakeSync.relinked} relinked`);
+    if (stats.jakeSync.property_filled) summary.push(`+ ${stats.jakeSync.property_filled} properties auto-filled`);
+  } catch (e) {
+    stats.jakeSync = { error: e.message };
+    hadError = true;
+  }
+
+  // ── 5. Monthly report (only on day 1) ────────────────────────────────
   const today = new Date();
   if (today.getUTCDate() === 1) {
     try {

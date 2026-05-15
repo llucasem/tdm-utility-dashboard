@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import TopBar               from '@/components/TopBar';
+import HealthBanner          from '@/components/HealthBanner';
 import StatsRow              from '@/components/StatsRow';
 import FiltersBar            from '@/components/FiltersBar';
 import BillsTable            from '@/components/BillsTable';
@@ -170,6 +171,7 @@ export default function Dashboard() {
         syncing={syncing}
         lastSynced={lastSynced}
       />
+      <HealthBanner />
       <StatsRow monthBills={monthBills} prevMonthBills={prevMonthBills} />
       <FiltersBar
         monthIndex={monthIndex}
