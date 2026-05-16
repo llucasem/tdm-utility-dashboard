@@ -69,7 +69,13 @@ export async function GET() {
     // Warnings
     const warnings = [];
     const lastSyncMs = lastBill.rows[0].ts ? (Date.now() - new Date(lastBill.rows[0].ts).getTime()) : Infinity;
-    if (lastSyncMs > 30 * 3600_000) warnings.push(`sync hasn't inserted a bill in ${Math.floor(lastSyncMs / 3600_000)}h — cron may be dead`);
+    // Threshold: 10 days. Utility emails are bursty — 1-3 day gaps are
+    // normal. We only worry after 10 days of complete silence, which would
+    // genuinely indicate the cron is broken or Gmail access is lost.
+    const lastSyncDays = lastSyncMs / 86_400_000;
+    if (lastSyncDays > 10) {
+      warnings.push(`sync hasn't inserted a bill in ${Math.floor(lastSyncDays)} days — cron may be dead`);
+    }
     if (tokenDaysLeft !== null && tokenDaysLeft < 30) warnings.push(`QB refresh token expires in ${tokenDaysLeft} days`);
     if (m.mapped < m.properties * 0.7) warnings.push(`only ${Math.round(m.mapped / m.properties * 100)}% of properties have a QB Class mapping`);
 
