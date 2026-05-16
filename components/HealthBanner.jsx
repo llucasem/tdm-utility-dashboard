@@ -3,10 +3,11 @@
 import { useEffect, useState } from 'react';
 
 /**
- * Banner amarillo que aparece arriba del dashboard cuando /api/health
- * reporta warnings — sync muerto, token QB caducando, mappings bajos, etc.
+ * Yellow banner that appears at the top of the dashboard when /api/health
+ * reports warnings — dead sync, QB token about to expire, low mapping
+ * coverage, etc.
  *
- * Hace fetch al cargar y cada 10 minutos.
+ * Fetches on mount and every 10 minutes.
  */
 export default function HealthBanner() {
   const [warnings, setWarnings] = useState([]);
@@ -43,7 +44,7 @@ export default function HealthBanner() {
     }}>
       <span style={{ fontSize: 20, lineHeight: 1, color: '#8A6500' }}>⚠</span>
       <div style={{ flex: 1, color: '#5C4400' }}>
-        <strong style={{ display: 'block', marginBottom: 4 }}>El sistema necesita atención:</strong>
+        <strong style={{ display: 'block', marginBottom: 4 }}>The system needs your attention:</strong>
         <ul style={{ margin: '4px 0 0', paddingLeft: 20 }}>
           {warnings.map((w, i) => (
             <li key={i} style={{ lineHeight: 1.5 }}>{w}</li>
@@ -61,7 +62,7 @@ export default function HealthBanner() {
           padding:      0,
           lineHeight:   1,
         }}
-        title="Ocultar hasta recarga"
+        title="Dismiss until reload"
       >×</button>
     </div>
   );

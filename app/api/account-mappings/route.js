@@ -14,7 +14,7 @@ export async function GET() {
   }
 }
 
-// POST — guarda un nuevo mapping y actualiza las facturas existentes con esa cuenta
+// POST — saves a new mapping and updates existing bills using that account
 export async function POST(request) {
   try {
     const { utility_type, provider, account_last4, property_address, unit } = await request.json();
@@ -23,7 +23,7 @@ export async function POST(request) {
       return Response.json({ ok: false, error: 'utility_type, account_last4 and property_address are required' }, { status: 400 });
     }
 
-    // Guardar o actualizar el mapping
+    // Insert or update the mapping
     await pool.query(
       `INSERT INTO account_mappings (utility_type, provider, account_last4, property_address, unit)
        VALUES ($1, $2, $3, $4, $5)
@@ -34,7 +34,7 @@ export async function POST(request) {
       [utility_type, provider || null, account_last4, property_address, unit || null]
     );
 
-    // Actualizar todas las facturas existentes que tengan esa cuenta sin dirección
+    // Update any existing bills with this account and no address
     const updated = await pool.query(
       `UPDATE utility_bills
        SET property_address = $1,

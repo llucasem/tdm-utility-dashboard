@@ -292,9 +292,14 @@ const dismissed = await pool.query(`
   UPDATE notifications SET read_at = NOW()
   WHERE read_at IS NULL
     AND (
+      -- Spanish legacy titles (pre-2026-05-16)
       title LIKE '%mapeadas a QuickBooks Classes%' OR
       title LIKE '%sin mapear — revisión manual%' OR
-      title LIKE '%facturas con Class distinta%'
+      title LIKE '%facturas con Class distinta%' OR
+      -- Current English titles
+      title LIKE '%properties mapped to QuickBooks Classes%' OR
+      title LIKE '%properties unmapped — manual review%' OR
+      title LIKE '%bills with a different Class than proposed%'
     )
 `);
 if (dismissed.rowCount > 0) console.log(`  · Marked ${dismissed.rowCount} previous mapping notifications as read\n`);
@@ -305,8 +310,8 @@ await pool.query(
    VALUES ($1, $2, $3, $4)`,
   [
     'success',
-    `${totalMapped} propiedades mapeadas a QuickBooks Classes`,
-    `Mapeo completado: ${totalMapped} de ${totalProps} propiedades+unidades ya están asociadas a su Class de QuickBooks. Cuando llegue una factura nueva de cualquiera de estas, se etiquetará automáticamente sin tu intervención.`,
+    `${totalMapped} properties mapped to QuickBooks Classes`,
+    `Mapping complete: ${totalMapped} of ${totalProps} property+unit pairs are now associated with their QuickBooks Class. When a new bill arrives for any of these, it will be auto-tagged with no manual intervention.`,
     JSON.stringify({ totalMapped, totalProps, mappedPct: Math.round(totalMapped / totalProps * 100) }),
   ]
 );
@@ -317,7 +322,7 @@ if (unmapped.length > 0) {
   const totalBillsAffected = unmapped.reduce((s, p) => s + p.bill_count, 0);
   const list = unmapped.map(p => {
     const u = p.unit ? ` · ${p.unit}` : '';
-    return `${p.property_address.split(',')[0]}${u} (${p.bill_count} facturas)`;
+    return `${p.property_address.split(',')[0]}${u} (${p.bill_count} bills)`;
   }).join(' · ');
 
   await pool.query(
@@ -325,8 +330,8 @@ if (unmapped.length > 0) {
      VALUES ($1, $2, $3, $4)`,
     [
       'warning',
-      `${unmapped.length} propiedades sin mapear — revisión manual`,
-      `Estas propiedades tienen facturas pero no se han podido emparejar automáticamente con una Class de QuickBooks (${totalBillsAffected} facturas afectadas). Revisar con Jake/Edonis si la Class existe con otro nombre, o si hay que crearla. Lista: ${list}`,
+      `${unmapped.length} properties unmapped — manual review needed`,
+      `These properties have bills but couldn't be auto-paired to a QuickBooks Class (${totalBillsAffected} bills affected). Review with Jake/Edonis whether the Class exists under a different name, or whether it needs to be created. List: ${list}`,
       JSON.stringify({ count: unmapped.length, billsAffected: totalBillsAffected, properties: unmapped }),
     ]
   );
@@ -340,15 +345,15 @@ if (disagreesExisting > 0) {
      VALUES ($1, $2, $3, $4)`,
     [
       'info',
-      `${disagreesExisting} facturas con Class distinta a la propuesta`,
-      `Detectamos ${disagreesExisting} Purchases en QuickBooks que ya tienen una Class asignada distinta a la que propondríamos. La mayoría son colisiones de matching (mismo importe en propiedades vecinas) — el guardrail no las tocará, pero conviene revisarlas con Jake para confirmar.`,
+      `${disagreesExisting} bills with a different Class than proposed`,
+      `We detected ${disagreesExisting} Purchases in QuickBooks that already have a Class assigned different from what we'd propose. Most are matching collisions (same amount on neighbouring properties) — the guardrail won't touch them, but it's worth reviewing them with Jake to confirm.`,
       JSON.stringify({ disagreesExisting, agreesAlready, readyToTag }),
     ]
   );
   console.log(`  ℹ Created info notification: ${disagreesExisting} disagreements`);
 }
 
-console.log(`\n  → Jake las verá en la campana 🔔 al abrir el dashboard`);
+console.log(`\n  → Jake will see these in the bell 🔔 when he opens the dashboard`);
 
 console.log('\n═══════════════════════════════════════════════════════════════════');
 console.log('  LISTO. En la reunión ejecuta:');

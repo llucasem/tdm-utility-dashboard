@@ -17,7 +17,7 @@ export async function GET() {
     const emails = await getUtilityEmails();
 
     if (emails.length === 0) {
-      return Response.json({ ok: true, saved: 0, message: 'No hay emails en la carpeta Utilities.' });
+      return Response.json({ ok: true, saved: 0, message: 'No new emails in the Utilities folder.' });
     }
 
     const results = [];
@@ -70,14 +70,14 @@ export async function GET() {
         continue;
       }
 
-      // 1. Parsear con Claude (leer PDF si existe, o cuerpo del email)
+      // 1. Parse with Claude (PDF if attached, otherwise email body)
       let parsed;
       try {
         parsed = await parseEmail(email);
       } catch (parseErr) {
-        const reason = parseErr.message?.includes('429') ? 'rate limit — reintentar más tarde' : parseErr.message;
+        const reason = parseErr.message?.includes('429') ? 'rate limit — retry later' : parseErr.message;
         results.push({ id: email.id, status: 'error', reason });
-        await new Promise(r => setTimeout(r, 2000)); // esperar más si hay rate limit
+        await new Promise(r => setTimeout(r, 2000)); // wait extra if rate-limited
         continue;
       }
 
@@ -92,7 +92,7 @@ export async function GET() {
         continue;
       }
 
-      // 2. Aplicar mapping si existe y no hay dirección extraída del email
+      // 2. Apply mapping if it exists and the email didn't yield an address
       let finalAddress = parsed.property_address || null;
       let finalUnit    = parsed.unit             || null;
       if (!finalAddress && parsed.account_last4 && parsed.utility_type) {
@@ -107,7 +107,7 @@ export async function GET() {
         }
       }
 
-      // 3. Guardar en Neon — ON CONFLICT skips duplicates atomically
+      // 3. Save to Neon — ON CONFLICT skips duplicates atomically
       const res = await pool.query(
         `INSERT INTO utility_bills
            (gmail_message_id, utility_type, property_address, unit, account_last4,
@@ -130,12 +130,12 @@ export async function GET() {
       );
 
       if (res.rowCount === 0) {
-        results.push({ id: email.id, status: 'skipped', reason: 'ya procesado' });
+        results.push({ id: email.id, status: 'skipped', reason: 'already processed' });
       } else {
         results.push({ id: email.id, status: 'saved', data: parsed, billId: res.rows[0].id, hasProperty: !!res.rows[0].property_address });
       }
 
-      // Pausa entre llamadas a Claude para no exceder el límite de velocidad
+      // Pause between Claude calls to stay under the rate limit
       await new Promise(r => setTimeout(r, 2000));
     }
 
