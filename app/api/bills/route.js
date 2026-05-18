@@ -26,7 +26,7 @@ function mapBillRow(row) {
     unit:       row.unit || '',
     account:    row.account_last4 || '—',
     amount:     row.amount_due ? parseFloat(row.amount_due) : 0,
-    due:        formatDue(row.due_date) || formatDue(row.email_received_at) || '—',
+    due:        formatDue(row.email_received_at) || formatDue(row.due_date) || '—',
     dueRaw:     filterDate ? filterDate.toISOString().slice(0, 10) : null,
     status:     row.status || 'pending',
     gmailLink:  row.gmail_message_id && !String(row.gmail_message_id).startsWith('manual:')
@@ -58,7 +58,7 @@ export async function GET() {
               is_anomaly, anomaly_baseline, anomaly_ratio
        FROM utility_bills
        WHERE amount_due IS NOT NULL AND amount_due > 0
-       ORDER BY due_date ASC NULLS LAST, created_at DESC`
+       ORDER BY email_received_at DESC NULLS LAST, created_at DESC`
     );
 
     const bills = result.rows.map(mapBillRow);
