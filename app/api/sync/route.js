@@ -136,7 +136,8 @@ export async function GET() {
       }
 
       // Pause between Claude calls to stay under the rate limit
-      await new Promise(r => setTimeout(r, 2000));
+      // (Anthropic Haiku: 30k tokens/min — 500ms gives ~120 calls/min headroom)
+      await new Promise(r => setTimeout(r, 500));
     }
 
     const saved   = results.filter(r => r.status === 'saved').length;
