@@ -2,7 +2,12 @@ import pool from '@/lib/db';
 import { matchBatch } from '@/lib/qb-match';
 import { autoTagBatch } from '@/lib/auto-tag';
 import { runLearningPass, linkBillsFromRecentClasses } from '@/lib/class-learner';
+import { refreshLearnedVendors, refreshLearnedBankAccounts } from '@/lib/known-vendors';
 import { createNotification } from '@/lib/notifier';
+
+// Alarm threshold: more than this many tags in a single cron run is suspicious
+// (typical day is 5-10 tags). Triggers a warning notification.
+const TAG_RATE_ALARM = 20;
 
 // Vercel Hobby caps function timeout at 60s. We sequence multiple batches
 // of small size so the total fits comfortably.
@@ -64,6 +69,16 @@ export async function GET() {
     stats.autoTag = ids.length > 0 ? await autoTagBatch(ids) : { skipped: 0 };
     if (stats.autoTag.tagged) summary.push(`🏷 ${stats.autoTag.tagged} tagged in QB`);
     if (stats.autoTag.error)  summary.push(`! ${stats.autoTag.error} tag errors`);
+
+    // Rate alarm — too many tags in a single run is suspicious
+    if (stats.autoTag.tagged >= TAG_RATE_ALARM) {
+      await createNotification({
+        type:    'warning',
+        title:   `High tag rate · ${stats.autoTag.tagged} tags in one cron run`,
+        message: `Threshold is ${TAG_RATE_ALARM}. Review the daily activity in the dashboard to confirm.`,
+        metadata: { tagged: stats.autoTag.tagged, ids },
+      });
+    }
   } catch (e) {
     stats.autoTag = { error: e.message };
     hadError = true;
@@ -92,17 +107,32 @@ export async function GET() {
     hadError = true;
   }
 
+  // ── 4b. Refresh learned vendors + bank accounts (cheap) ──────────────
+  // Aggregates payees and bank accounts seen in successfully tagged bills and
+  // promotes the ones that appear ≥3 times to the known whitelist.
+  try {
+    const v = await refreshLearnedVendors({ sinceDays: 180 });
+    const a = await refreshLearnedBankAccounts({ sinceDays: 180 });
+    stats.learnVendors  = v;
+    stats.learnAccounts = a;
+    if (v.new > 0) summary.push(`🆕 ${v.new} new vendor patterns`);
+    if (a.new > 0) summary.push(`🆕 ${a.new} new bank accounts`);
+  } catch (e) {
+    stats.learnVendors = { error: e.message };
+  }
+
   // ── 5. Monthly report (only on day 1) ────────────────────────────────
   const today = new Date();
   if (today.getUTCDate() === 1) {
     try {
       const base = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000';
-      // Fire-and-forget — the monthly-report endpoint handles its own notification
-      await fetch(`${base}/api/quickbooks/monthly-report?send=true`, {
-        headers: { 'x-vercel-cron': '1' },
-      }).catch(() => {});
+      // Fire-and-forget — both endpoints create their own notifications
+      await Promise.all([
+        fetch(`${base}/api/quickbooks/monthly-report?send=true`, { headers: { 'x-vercel-cron': '1' } }).catch(() => {}),
+        fetch(`${base}/api/quickbooks/monthly-review?send=true`, { headers: { 'x-vercel-cron': '1' } }).catch(() => {}),
+      ]);
       stats.monthlyReport = 'fired';
-      summary.push('📊 monthly report fired');
+      summary.push('📊 monthly report + review fired');
     } catch (e) {
       stats.monthlyReport = `error: ${e.message}`;
     }
