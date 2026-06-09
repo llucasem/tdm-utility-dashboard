@@ -123,6 +123,44 @@ export async function GET() {
     stats.learnVendors = { error: e.message };
   }
 
+  // ── 4c. Maintenance: prune notifications older than 90 days ──────────
+  try {
+    const r = await pool.query(`DELETE FROM notifications WHERE created_at < NOW() - INTERVAL '90 days'`);
+    if (r.rowCount > 0) {
+      stats.notificationsPruned = r.rowCount;
+      summary.push(`🧹 ${r.rowCount} old notifications pruned`);
+    }
+  } catch (e) {
+    stats.notificationsPruned = { error: e.message };
+  }
+
+  // ── 4d. Maintenance: backfill duplicate flag on legacy bills ─────────
+  // The dedup logic in the sync route only catches new bills going forward.
+  // This sweep catches the legacy ones (same utility_type + account_last4 +
+  // amount within ±10 days, keep the oldest, mark the rest as duplicate).
+  try {
+    const r = await pool.query(`
+      WITH grouped AS (
+        SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY utility_type, account_last4, ROUND(amount_due::numeric, 2),
+                       date_trunc('week', email_received_at)
+          ORDER BY email_received_at
+        ) AS rn
+        FROM utility_bills
+        WHERE amount_due > 0 AND account_last4 IS NOT NULL AND account_last4 != ''
+          AND NOT is_duplicate
+      )
+      UPDATE utility_bills SET is_duplicate = true
+      WHERE id IN (SELECT id FROM grouped WHERE rn > 1)
+    `);
+    if (r.rowCount > 0) {
+      stats.duplicatesFlagged = r.rowCount;
+      summary.push(`🔁 ${r.rowCount} legacy duplicates flagged`);
+    }
+  } catch (e) {
+    stats.duplicatesFlagged = { error: e.message };
+  }
+
   // ── 5. Monthly report (only on day 1) ────────────────────────────────
   const today = new Date();
   if (today.getUTCDate() === 1) {
