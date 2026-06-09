@@ -4,6 +4,7 @@ import { autoTagBatch } from '@/lib/auto-tag';
 import { runLearningPass, linkBillsFromRecentClasses } from '@/lib/class-learner';
 import { refreshLearnedVendors, refreshLearnedBankAccounts } from '@/lib/known-vendors';
 import { createNotification } from '@/lib/notifier';
+import { startHeartbeat, endHeartbeat } from '@/lib/heartbeat';
 
 // Alarm threshold: more than this many tags in a single cron run is suspicious
 // (typical day is 5-10 tags). Triggers a warning notification.
@@ -29,6 +30,7 @@ export const maxDuration = 60;
  * previous day before retrying.
  */
 export async function GET() {
+  const hb = startHeartbeat('retry-and-learn');
   const stats = {};
   const summary = [];
   let hadError = false;
@@ -148,5 +150,6 @@ export async function GET() {
     });
   }
 
+  await endHeartbeat(hb, { ok: !hadError, error: hadError ? JSON.stringify(stats).slice(0, 400) : null });
   return Response.json({ ok: !hadError, summary, ...stats });
 }

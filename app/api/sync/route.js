@@ -5,6 +5,7 @@ import { autoTagBatch }     from '@/lib/auto-tag';
 import { matchBatch }       from '@/lib/qb-match';
 import { detectAnomaliesBatch } from '@/lib/anomaly-detector';
 import { createNotification } from '@/lib/notifier';
+import { startHeartbeat, endHeartbeat } from '@/lib/heartbeat';
 
 // Vercel function timeout — bumped from the default 10s. On Hobby plan the
 // max is 60s; on Pro this can go up to 300s. The pre-filter in lib/gmail.js
@@ -13,10 +14,12 @@ import { createNotification } from '@/lib/notifier';
 export const maxDuration = 60;
 
 export async function GET() {
+  const hb = startHeartbeat('sync');
   try {
     const emails = await getUtilityEmails();
 
     if (emails.length === 0) {
+      await endHeartbeat(hb, { ok: true });
       return Response.json({ ok: true, saved: 0, message: 'No new emails in the Utilities folder.' });
     }
 
@@ -262,10 +265,12 @@ export async function GET() {
       });
     }
 
+    await endHeartbeat(hb, { ok: errors === 0 && !autoTagStats?.error });
     return Response.json({ ok: true, saved, skipped, errors, results, match: matchStats, autoTag: autoTagStats });
 
   } catch (error) {
     console.error('[sync] Error:', error.message);
+    await endHeartbeat(hb, { ok: false, error: error.message });
     return Response.json({ ok: false, error: error.message }, { status: 500 });
   }
 }

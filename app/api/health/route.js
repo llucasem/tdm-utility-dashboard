@@ -4,11 +4,11 @@ import pool from '@/lib/db';
  * GET /api/health
  *
  * Operational status snapshot. Tells you whether the crons are alive and
- * QB tokens are still good. Designed to be polled (manually or by an
- * external uptime monitor).
+ * QB tokens are still good. Designed to be polled by an external uptime
+ * monitor (UptimeRobot, Better Uptime, etc.).
  *
- * No secrets in the response — safe to expose, but middleware still
- * requires the session cookie (it's protected like the rest of /api).
+ * No secrets in the response — middleware whitelists this path so it's
+ * reachable without a session cookie.
  */
 export async function GET() {
   try {
@@ -45,6 +45,18 @@ export async function GET() {
       lastLearn = r.rows[0].ts;
     } catch {}
 
+    // Cron heartbeats — the most direct signal of "cron actually ran"
+    // (distinguishes "cron ran but found nothing" from "cron never ran").
+    let heartbeats = [];
+    try {
+      const r = await pool.query(`
+        SELECT cron_name, last_ran_at, last_run_ok, last_error, runs_total, runs_failed
+        FROM cron_heartbeats
+        ORDER BY cron_name
+      `);
+      heartbeats = r.rows;
+    } catch {}
+
     // QB token freshness
     const tok = await pool.query(`
       SELECT realm_id, refresh_expires_at FROM quickbooks_tokens
@@ -69,15 +81,26 @@ export async function GET() {
     // Warnings
     const warnings = [];
     const lastSyncMs = lastBill.rows[0].ts ? (Date.now() - new Date(lastBill.rows[0].ts).getTime()) : Infinity;
-    // Threshold: 10 days. Utility emails are bursty — 1-3 day gaps are
-    // normal. We only worry after 10 days of complete silence, which would
-    // genuinely indicate the cron is broken or Gmail access is lost.
     const lastSyncDays = lastSyncMs / 86_400_000;
-    if (lastSyncDays > 10) {
+    // Threshold: 3 days. Previous 10-day threshold meant the 13-day cron
+    // outage went unflagged. Reduced per devops-incident-responder advice.
+    if (lastSyncDays > 3) {
       warnings.push(`sync hasn't inserted a bill in ${Math.floor(lastSyncDays)} days — cron may be dead`);
     }
     if (tokenDaysLeft !== null && tokenDaysLeft < 30) warnings.push(`QB refresh token expires in ${tokenDaysLeft} days`);
     if (m.mapped < m.properties * 0.7) warnings.push(`only ${Math.round(m.mapped / m.properties * 100)}% of properties have a QB Class mapping`);
+
+    // Cron heartbeat warnings — a cron that hasn't run in >36h (gives margin
+    // over 24h scheduled) is suspicious. This catches "cron silently dead"
+    // even when the inbox happened to have no new emails.
+    for (const hb of heartbeats) {
+      if (!hb.last_ran_at) continue;
+      const ageMs = Date.now() - new Date(hb.last_ran_at).getTime();
+      if (ageMs > 36 * 3600 * 1000) {
+        warnings.push(`cron "${hb.cron_name}" hasn't run in ${Math.floor(ageMs / 3600 / 1000)}h`);
+      }
+      if (!hb.last_run_ok) warnings.push(`cron "${hb.cron_name}" last run failed: ${hb.last_error || 'unknown'}`);
+    }
 
     return Response.json({
       ok: true,
@@ -99,6 +122,13 @@ export async function GET() {
         realm_id:                tok.rows[0]?.realm_id || null,
         refresh_token_days_left: tokenDaysLeft,
       },
+      crons: heartbeats.map(h => ({
+        name: h.cron_name,
+        last_ran_at: h.last_ran_at,
+        last_run_ok: h.last_run_ok,
+        runs_total: h.runs_total,
+        runs_failed: h.runs_failed,
+      })),
       warnings,
     });
   } catch (e) {
