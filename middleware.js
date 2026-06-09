@@ -8,9 +8,15 @@ export function middleware(request) {
   if (PUBLIC_PATHS.some(p => pathname.startsWith(p))) return NextResponse.next()
   if (pathname.startsWith('/_next') || pathname.startsWith('/favicon')) return NextResponse.next()
 
-  // Vercel adds this header on legitimate cron invocations and strips it from
-  // any incoming external request, so it cannot be spoofed.
+  // Vercel cron auth. Two signals — both unspoofable from outside Vercel's edge:
+  //   1. Legacy header `x-vercel-cron` (some Vercel plans still send it)
+  //   2. Authorization: Bearer ${CRON_SECRET} (current Hobby behaviour since 2024,
+  //      Vercel injects this when CRON_SECRET env var is set)
   if (request.headers.get('x-vercel-cron')) return NextResponse.next()
+  const authHeader = request.headers.get('authorization')
+  if (authHeader && process.env.CRON_SECRET && authHeader === `Bearer ${process.env.CRON_SECRET}`) {
+    return NextResponse.next()
+  }
 
   const session = request.cookies.get('tdm_session')?.value
   const expected = process.env.APP_SESSION_TOKEN
