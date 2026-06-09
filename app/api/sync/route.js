@@ -82,12 +82,44 @@ export async function GET() {
       }
 
       if (!parsed) {
+        // Persist a synthetic row so this email doesn't infinite-retry on
+        // every sync. parse_error_count caps retries to avoid filling the DB
+        // with junk if Claude can't parse a malformed email.
+        await pool.query(
+          `INSERT INTO utility_bills
+             (gmail_message_id, utility_type, amount_due, email_received_at, email_subject, email_from, status, parse_error_count)
+           VALUES ($1, 'other', NULL, $2, $3, $4, 'pending', 1)
+           ON CONFLICT (gmail_message_id) DO UPDATE SET parse_error_count = utility_bills.parse_error_count + 1`,
+          [email.id, email.date, email.subject, email.from || null]
+        );
         results.push({ id: email.id, status: 'error', reason: 'Claude no pudo extraer datos' });
+        continue;
+      }
+
+      // Sentinel from sanitize(): this email is a payment confirmation — not a bill.
+      // Insert a 0-amount row so we mark it as processed and never re-attempt it.
+      if (parsed.__skip) {
+        await pool.query(
+          `INSERT INTO utility_bills
+             (gmail_message_id, utility_type, amount_due, email_received_at, email_subject, email_from, status, account_last4)
+           VALUES ($1, 'other', 0, $2, $3, $4, 'pending', $5)
+           ON CONFLICT (gmail_message_id) DO NOTHING`,
+          [email.id, email.date, email.subject, email.from || null, parsed.account_last4 || null]
+        );
+        results.push({ id: email.id, status: 'skipped', reason: parsed.reason || 'payment confirmation' });
         continue;
       }
 
       // Skip emails with no payable amount — notifications, confirmations, etc.
       if (!parsed.amount_due || parseFloat(parsed.amount_due) <= 0) {
+        // Same insert-as-skipped pattern to avoid infinite retries.
+        await pool.query(
+          `INSERT INTO utility_bills
+             (gmail_message_id, utility_type, amount_due, email_received_at, email_subject, email_from, status, account_last4)
+           VALUES ($1, $2, 0, $3, $4, $5, 'pending', $6)
+           ON CONFLICT (gmail_message_id) DO NOTHING`,
+          [email.id, parsed.utility_type || 'other', email.date, email.subject, email.from || null, parsed.account_last4 || null]
+        );
         results.push({ id: email.id, status: 'skipped', reason: 'amount_due is 0 or missing' });
         continue;
       }
@@ -107,12 +139,31 @@ export async function GET() {
         }
       }
 
+      // 2.5 — DEDUP rule (system_lesson "Spectrum/ConEd send 2 emails per
+      // bill"): if we already saved a bill with the same (utility_type,
+      // account_last4, amount_due) within ±10 days, mark this one as
+      // duplicate so it doesn't pollute the dashboard or matcher.
+      let isDuplicate = false;
+      if (parsed.account_last4 && parsed.amount_due && parsed.utility_type) {
+        const dup = await pool.query(
+          `SELECT id FROM utility_bills
+            WHERE utility_type = $1 AND account_last4 = $2
+              AND ROUND(amount_due::numeric, 2) = ROUND($3::numeric, 2)
+              AND email_received_at BETWEEN $4::timestamptz - INTERVAL '10 days'
+                                       AND $4::timestamptz + INTERVAL '10 days'
+              AND NOT is_duplicate
+            LIMIT 1`,
+          [parsed.utility_type, parsed.account_last4, parsed.amount_due, email.date]
+        );
+        if (dup.rowCount > 0) isDuplicate = true;
+      }
+
       // 3. Save to Neon — ON CONFLICT skips duplicates atomically
       const res = await pool.query(
         `INSERT INTO utility_bills
            (gmail_message_id, utility_type, property_address, unit, account_last4,
-            amount_due, due_date, email_received_at, email_subject, email_from, status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending')
+            amount_due, due_date, email_received_at, email_subject, email_from, status, is_duplicate)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11)
          ON CONFLICT (gmail_message_id) DO NOTHING
          RETURNING id, property_address`,
         [
@@ -126,11 +177,14 @@ export async function GET() {
           email.date,
           email.subject,
           email.from           || null,
+          isDuplicate,
         ]
       );
 
       if (res.rowCount === 0) {
         results.push({ id: email.id, status: 'skipped', reason: 'already processed' });
+      } else if (isDuplicate) {
+        results.push({ id: email.id, status: 'skipped', reason: 'duplicate of existing bill (same account+amount within ±10d)', billId: res.rows[0].id });
       } else {
         results.push({ id: email.id, status: 'saved', data: parsed, billId: res.rows[0].id, hasProperty: !!res.rows[0].property_address });
       }
