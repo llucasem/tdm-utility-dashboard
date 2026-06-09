@@ -99,8 +99,11 @@ export async function GET() {
   // ── 4. Daily mini-sync from QB Classes ───────────────────────────────
   // Closes the loop: when Jake classes a Purchase that should link to a
   // bill currently in pending/not_found/matched-wrong, this step links it.
+  // Window bumped 14 → 60 days (2026-06-09): Jake sometimes back-classes
+  // older bills (reconciliation), and 14 days was missing them. 60 days
+  // covers a full monthly reconciliation cycle.
   try {
-    stats.jakeSync = await linkBillsFromRecentClasses({ sinceDays: 14 });
+    stats.jakeSync = await linkBillsFromRecentClasses({ sinceDays: 60 });
     if (stats.jakeSync.linked)         summary.push(`🔗 ${stats.jakeSync.linked} bills linked from Jake`);
     if (stats.jakeSync.relinked)       summary.push(`↻ ${stats.jakeSync.relinked} relinked`);
     if (stats.jakeSync.property_filled) summary.push(`+ ${stats.jakeSync.property_filled} properties auto-filled`);
