@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import TopBar               from '@/components/TopBar';
+import ViewTabs             from '@/components/ViewTabs';
 import HealthBanner          from '@/components/HealthBanner';
 import StatsRow              from '@/components/StatsRow';
 import FiltersBar            from '@/components/FiltersBar';
@@ -10,30 +11,44 @@ import BillDetailModal       from '@/components/BillDetailModal';
 import AddBillModal          from '@/components/AddBillModal';
 import AssignPropertyModal   from '@/components/AssignPropertyModal';
 import AnalyticsModal        from '@/components/AnalyticsModal';
+import RentStatsRow          from '@/components/RentStatsRow';
+import RentTable             from '@/components/RentTable';
+import RentDetailModal       from '@/components/RentDetailModal';
+import AssignMailboxModal    from '@/components/AssignMailboxModal';
 
 const DUE_MONTH_MAP = { Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12' };
 
 export default function Dashboard() {
-  const [bills,           setBills]           = useState([]);
-  const [properties,      setProperties]      = useState([]);
-  const [loading,         setLoading]         = useState(true);
-  const [monthIndex,      setMonthIndex]      = useState(() => new Date().getMonth());
-  const [year,            setYear]            = useState(() => new Date().getFullYear());
-  const [search,          setSearch]          = useState('');
-  const [selectedBill,    setSelectedBill]    = useState(null);
-  const [assignBill,      setAssignBill]      = useState(null);
-  const [darkMode,        setDarkMode]        = useState(false);
-  const [toast,           setToast]           = useState(false);
-  const [toastMsg,        setToastMsg]        = useState('');
-  const [analyticsOpen,   setAnalyticsOpen]   = useState(false);
-  const [addOpen,         setAddOpen]         = useState(false);
-  const [syncing,         setSyncing]         = useState(false);
-  const [lastSynced,      setLastSynced]      = useState('');
+  const [view,             setView]             = useState('utilities');  // 'utilities' | 'rent'
+  const [bills,            setBills]            = useState([]);
+  const [rentPayments,     setRentPayments]     = useState([]);
+  const [properties,       setProperties]       = useState([]);
+  const [loading,          setLoading]          = useState(true);
+  const [monthIndex,       setMonthIndex]       = useState(() => new Date().getMonth());
+  const [year,             setYear]             = useState(() => new Date().getFullYear());
+  const [search,           setSearch]           = useState('');
+  const [selectedBill,     setSelectedBill]     = useState(null);
+  const [assignBill,       setAssignBill]       = useState(null);
+  const [selectedPayment,  setSelectedPayment]  = useState(null);
+  const [assignPayment,    setAssignPayment]    = useState(null);
+  const [darkMode,         setDarkMode]         = useState(false);
+  const [toast,            setToast]            = useState(false);
+  const [toastMsg,         setToastMsg]         = useState('');
+  const [analyticsOpen,    setAnalyticsOpen]    = useState(false);
+  const [addOpen,          setAddOpen]          = useState(false);
+  const [syncing,          setSyncing]          = useState(false);
+  const [lastSynced,       setLastSynced]       = useState('');
 
   const fetchBills = async () => {
     const res  = await fetch('/api/bills');
     const data = await res.json();
     if (data.ok) setBills(data.bills);
+  };
+
+  const fetchRentPayments = async () => {
+    const res  = await fetch('/api/rent-payments');
+    const data = await res.json();
+    if (data.ok) setRentPayments(data.payments);
   };
 
   const fetchProperties = async () => {
@@ -43,7 +58,7 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    Promise.all([fetchBills(), fetchProperties()])
+    Promise.all([fetchBills(), fetchRentPayments(), fetchProperties()])
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -111,14 +126,21 @@ export default function Dashboard() {
       const res  = await fetch('/api/sync');
       const data = await res.json();
       if (data.ok) {
-        await fetchBills();
+        await Promise.all([fetchBills(), fetchRentPayments()]);
 
         const now = new Date();
         const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
         setLastSynced(`today ${timeStr}`);
 
-        if (data.saved > 0) showToast(`Sync complete — ${data.saved} new bill${data.saved !== 1 ? 's' : ''} added`);
-        else showToast('Sync complete — no new bills found');
+        const rentNew = data.airtable?.rent || 0;
+        const buildNew = data.airtable?.conservice || 0;
+        const totalNew = (data.saved || 0) + rentNew + buildNew;
+        const parts = [];
+        if (data.saved)  parts.push(`${data.saved} bill${data.saved !== 1 ? 's' : ''}`);
+        if (rentNew)     parts.push(`${rentNew} rent payment${rentNew !== 1 ? 's' : ''}`);
+        if (buildNew)    parts.push(`${buildNew} Conservice`);
+        if (totalNew > 0) showToast(`Sync complete — ${parts.join(' · ')} added`);
+        else showToast('Sync complete — no new entries');
       } else {
         showToast('Sync failed — check connection');
       }
@@ -129,31 +151,49 @@ export default function Dashboard() {
     }
   };
 
+  const handleMailboxAssigned = async (result) => {
+    await fetchRentPayments();
+    const newly = result?.newlyAssigned || 0;
+    const re    = result?.reassigned    || 0;
+    const parts = [];
+    if (newly > 0) parts.push(`${newly} newly assigned`);
+    if (re > 0)    parts.push(`${re} corrected`);
+    const msg = parts.length > 0
+      ? `Mailbox mapped · ${parts.join(' · ')}`
+      : 'Mailbox mapped to property';
+    showToast(msg);
+  };
+
   const prevMonthIndex = monthIndex === 0 ? 11 : monthIndex - 1;
   const prevYear       = monthIndex === 0 ? year - 1 : year;
 
   const monthBills    = bills.filter(b => b.dueMonth === monthIndex && b.dueYear === year);
   const prevMonthBills = bills.filter(b => b.dueMonth === prevMonthIndex && b.dueYear === prevYear);
-  const filtered      = monthBills.filter(b => {
-    if (search === '') return true;
-    const term = search.trim().toLowerCase();
 
-    // Text match — property and unit
-    if ((b.property || '').toLowerCase().includes(term)) return true;
-    if ((b.unit || '').toLowerCase().includes(term)) return true;
+  const monthPayments     = rentPayments.filter(p => p.month === monthIndex && p.year === year);
+  const prevMonthPayments = rentPayments.filter(p => p.month === prevMonthIndex && p.year === prevYear);
 
-    // Amount match — accept "61.25", "$61.25", "61", etc.
+  // Shared search predicate for amount + text
+  function searchMatches(term, fields, amount) {
+    if (!term) return true;
+    for (const f of fields) {
+      if ((f || '').toLowerCase().includes(term)) return true;
+    }
     const numeric = parseFloat(term.replace(/[^0-9.]/g, ''));
     if (!isNaN(numeric) && numeric > 0) {
-      const amt = b.amount;
-      // Exact match (after rounding to 2 decimals)
-      if (Math.abs(amt - numeric) < 0.005) return true;
-      // Substring match on the number itself (e.g. "61" finds 61.25, 161.40)
-      if (amt.toFixed(2).includes(term)) return true;
+      if (Math.abs(amount - numeric) < 0.005) return true;
+      if (amount.toFixed(2).includes(term)) return true;
     }
-
     return false;
-  });
+  }
+
+  const term = search.trim().toLowerCase();
+  const filtered = monthBills.filter(b =>
+    searchMatches(term, [b.property, b.unit], b.amount)
+  );
+  const filteredPayments = monthPayments.filter(p =>
+    searchMatches(term, [p.property, p.unit, p.landlord, p.portal, p.mailbox], p.amount)
+  );
   if (loading) return (
     <div className="page-wrap" style={{ display:'flex', alignItems:'center', justifyContent:'center', minHeight:'100vh' }}>
       <p style={{ color:'var(--text-muted)', fontFamily:'var(--font-serif)' }}>Loading bills…</p>
@@ -172,20 +212,46 @@ export default function Dashboard() {
         lastSynced={lastSynced}
       />
       <HealthBanner />
-      <StatsRow monthBills={monthBills} prevMonthBills={prevMonthBills} />
-      <FiltersBar
-        monthIndex={monthIndex}
-        year={year}
-        onPrev={prevMonth}
-        onNext={nextMonth}
-        search={search}
-        onSearch={setSearch}
-      />
-      <BillsTable
-        filtered={filtered}
-        onSelectBill={setSelectedBill}
-        onAssignBill={setAssignBill}
-      />
+      <ViewTabs view={view} onChange={setView} />
+
+      {view === 'utilities' && (
+        <section role="tabpanel" id="panel-utilities" aria-labelledby="tab-utilities">
+          <StatsRow monthBills={monthBills} prevMonthBills={prevMonthBills} />
+          <FiltersBar
+            monthIndex={monthIndex}
+            year={year}
+            onPrev={prevMonth}
+            onNext={nextMonth}
+            search={search}
+            onSearch={setSearch}
+          />
+          <BillsTable
+            filtered={filtered}
+            onSelectBill={setSelectedBill}
+            onAssignBill={setAssignBill}
+          />
+        </section>
+      )}
+
+      {view === 'rent' && (
+        <section role="tabpanel" id="panel-rent" aria-labelledby="tab-rent">
+          <RentStatsRow monthPayments={monthPayments} prevMonthPayments={prevMonthPayments} />
+          <FiltersBar
+            monthIndex={monthIndex}
+            year={year}
+            onPrev={prevMonth}
+            onNext={nextMonth}
+            search={search}
+            onSearch={setSearch}
+            placeholder="Search by property, landlord, mailbox or amount…"
+          />
+          <RentTable
+            filtered={filteredPayments}
+            onSelectPayment={setSelectedPayment}
+            onAssignPayment={setAssignPayment}
+          />
+        </section>
+      )}
 
       <div className={`toast ${toast ? 'show' : ''}`}>{toastMsg}</div>
 
@@ -210,6 +276,16 @@ export default function Dashboard() {
       <AnalyticsModal
         open={analyticsOpen}
         onClose={() => setAnalyticsOpen(false)}
+      />
+      <RentDetailModal
+        payment={selectedPayment}
+        onClose={() => setSelectedPayment(null)}
+      />
+      <AssignMailboxModal
+        payment={assignPayment}
+        properties={properties}
+        onClose={() => setAssignPayment(null)}
+        onAssigned={handleMailboxAssigned}
       />
     </div>
   );

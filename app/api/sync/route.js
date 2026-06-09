@@ -6,6 +6,7 @@ import { matchBatch }       from '@/lib/qb-match';
 import { detectAnomaliesBatch } from '@/lib/anomaly-detector';
 import { createNotification } from '@/lib/notifier';
 import { startHeartbeat, endHeartbeat } from '@/lib/heartbeat';
+import { syncAirtable }     from '@/lib/airtable-sync';
 
 // Vercel function timeout — bumped from the default 10s. On Hobby plan the
 // max is 60s; on Pro this can go up to 300s. The pre-filter in lib/gmail.js
@@ -265,8 +266,30 @@ export async function GET() {
       });
     }
 
+    // ── Airtable sync (rent payments + Conservice utilities) ───────────
+    // Runs after Gmail so the same /api/sync handles everything in 60s.
+    // We cap to 15 records per run to stay well under the Hobby 60s limit
+    // when combined with the Gmail half.
+    let airtableStats = null;
+    try {
+      airtableStats = await syncAirtable({ limit: 15 });
+    } catch (e) {
+      airtableStats = { ok: false, error: e.message };
+      await createNotification({
+        type:    'error',
+        title:   'Airtable sync failed',
+        message: `Could not run Airtable rent sync: ${e.message}`,
+      });
+    }
+
     await endHeartbeat(hb, { ok: errors === 0 && !autoTagStats?.error });
-    return Response.json({ ok: true, saved, skipped, errors, results, match: matchStats, autoTag: autoTagStats });
+    return Response.json({
+      ok: true,
+      saved, skipped, errors, results,
+      match: matchStats,
+      autoTag: autoTagStats,
+      airtable: airtableStats,
+    });
 
   } catch (error) {
     console.error('[sync] Error:', error.message);

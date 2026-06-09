@@ -300,6 +300,133 @@ body.dark .qb-miss { background: #4a2626; color: #e0b3b3; }
 .notif-message { font-family: 'Lora', serif; font-size: 12px; color: var(--text2); line-height: 1.4; word-break: break-word; }
 .notif-time { font-family: 'Inconsolata', monospace; font-size: 10px; color: var(--text3); margin-top: 4px; }
 
+/* ── View tabs (Utilities | Rent) ── */
+.view-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 22px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px;
+  width: fit-content;
+  box-shadow: var(--shadow-sm);
+}
+.view-tab {
+  font-family: 'Lora', serif;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 8px 22px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--text3);
+  cursor: pointer;
+  transition: all 0.15s;
+  letter-spacing: 0.2px;
+}
+.view-tab:hover {
+  color: var(--text);
+  background: var(--surface2);
+}
+.view-tab.active {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+}
+.view-tab.active:hover {
+  background: var(--accent-hover);
+  color: #fff;
+}
+
+/* ── Rent table (transaction list) ── */
+.rent-table {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 24px;
+}
+.rent-header {
+  display: grid;
+  grid-template-columns: 0.8fr 2.4fr 0.7fr 1.2fr 1fr 1fr;
+  padding: 10px 20px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+  font-family: 'Lora', serif;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text3);
+}
+.rent-row {
+  display: grid;
+  grid-template-columns: 0.8fr 2.4fr 0.7fr 1.2fr 1fr 1fr;
+  padding: 12px 20px;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.rent-row:hover { background: var(--surface2); }
+.rent-row:last-of-type { border-bottom: none; }
+.rent-total-row {
+  display: grid;
+  grid-template-columns: 0.8fr 2.4fr 0.7fr 1.2fr 1fr 1fr;
+  padding: 12px 20px;
+  background: var(--surface2);
+  border-top: 1px solid var(--border);
+  gap: 8px;
+  font-family: 'Lora', serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text2);
+}
+.rent-paid-check {
+  margin-left: 6px;
+  color: #2e6b27;
+  font-weight: 700;
+}
+body.dark .rent-paid-check { color: #6cc467; }
+
+.portal-badge {
+  display: inline-block;
+  font-family: 'Inconsolata', monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text2);
+}
+
+.status-badge.paid { background: rgba(46, 107, 39, 0.1); color: #2e6b27; border-color: rgba(46, 107, 39, 0.3); }
+.status-badge.rent { background: rgba(139, 99, 67, 0.1); color: var(--accent); border-color: var(--border); }
+/* Brighter green + higher-contrast background in dark mode (AA 4.5:1+ on #241A0E surface) */
+body.dark .status-badge.paid { background: rgba(154, 230, 148, 0.18); color: #9ae694; border-color: rgba(154, 230, 148, 0.4); }
+body.dark .rent-paid-check { color: #9ae694; }
+
+@media (max-width: 880px) {
+  .rent-header,
+  .rent-row,
+  .rent-total-row {
+    grid-template-columns: 0.8fr 2fr 0.6fr 1fr 0.9fr;
+  }
+  .rent-header span:nth-child(5),
+  .rent-row span:nth-child(5),
+  .rent-total-row span:nth-child(5) {
+    display: none;
+  }
+}
+
 /* ── /admin/qb-classes page ── */
 .qbc-stat { font-family: 'Lora', serif; font-size: 13px; color: var(--text2); padding: 6px 12px; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); }
 .qbc-select { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); font-family: 'Lora', serif; font-size: 13px; color: var(--text); }
