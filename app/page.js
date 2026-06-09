@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react';
 import TopBar               from '@/components/TopBar';
 import ViewTabs             from '@/components/ViewTabs';
-import HealthBanner          from '@/components/HealthBanner';
 import StatsRow              from '@/components/StatsRow';
 import FiltersBar            from '@/components/FiltersBar';
 import BillsTable            from '@/components/BillsTable';
@@ -202,7 +201,6 @@ export default function Dashboard() {
         syncing={syncing}
         lastSynced={lastSynced}
       />
-      <HealthBanner />
       <ViewTabs view={view} onChange={setView} />
 
       {view === 'utilities' && (
