@@ -153,8 +153,13 @@ export default function Dashboard() {
   const prevMonthIndex = monthIndex === 0 ? 11 : monthIndex - 1;
   const prevYear       = monthIndex === 0 ? year - 1 : year;
 
-  const monthBills    = bills.filter(b => b.dueMonth === monthIndex && b.dueYear === year);
-  const prevMonthBills = bills.filter(b => b.dueMonth === prevMonthIndex && b.dueYear === prevYear);
+  // For the Utilities view we ONLY want per-unit utility bills (electricity,
+  // internet, gas, water). 'building' = Conservice consolidated utility
+  // statements which are not per-unit and shouldn't appear in the matrix.
+  const UTILITY_TYPES = ['electricity', 'internet', 'gas', 'water'];
+  const utilityBills  = bills.filter(b => UTILITY_TYPES.includes(b.type));
+  const monthBills     = utilityBills.filter(b => b.dueMonth === monthIndex && b.dueYear === year);
+  const prevMonthBills = utilityBills.filter(b => b.dueMonth === prevMonthIndex && b.dueYear === prevYear);
 
   const monthPayments     = rentPayments.filter(p => p.month === monthIndex && p.year === year);
   const prevMonthPayments = rentPayments.filter(p => p.month === prevMonthIndex && p.year === prevYear);
