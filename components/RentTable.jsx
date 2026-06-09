@@ -112,10 +112,14 @@ export default function RentTable({ filtered, onSelectPayment, onAssignPayment }
       {unmapped.length > 0 && (
         <div className="matrix-unmapped">
           <div className="matrix-unmapped-title">
-            Unassigned ({unmapped.length} {unmapped.length === 1 ? 'payment' : 'payments'} — click a row to map the mailbox to a property)
+            Unassigned ({unmapped.length} {unmapped.length === 1 ? 'payment' : 'payments'} — landlord address not configured yet)
+            {' · '}
+            <a href="/admin/landlords" style={{ color: 'var(--accent)', textDecoration: 'underline' }}>
+              Configure landlords →
+            </a>
           </div>
           {unmapped.map((p) => {
-            const open = () => (onAssignPayment ? onAssignPayment(p) : onSelectPayment(p));
+            const open = () => onSelectPayment(p);
             return (
               <div
                 key={p.id}
@@ -124,14 +128,16 @@ export default function RentTable({ filtered, onSelectPayment, onAssignPayment }
                 tabIndex={0}
                 onClick={open}
                 onKeyDown={rowKeyHandler(open)}
-                title="Click to assign mailbox to a property"
-                aria-label={`Assign mailbox ${p.mailbox || ''} to a property`}
+                title="View payment details"
+                aria-label={`View details for unassigned payment of ${fmt(p.amount || 0)}`}
               >
                 <span className="matrix-unmapped-type">rent</span>
-                <span className="mono" style={{ fontSize: 12 }}>{shortMailbox(p.mailbox)}</span>
+                <span style={{ fontSize: 12, color: 'var(--text2)' }}>
+                  {p.landlord || shortMailbox(p.mailbox)}
+                </span>
                 <span className="mono">{fmt(p.amount || 0)}</span>
                 <span className="matrix-unmapped-due">{p.paidDate}</span>
-                <span style={{ color: 'var(--accent)', fontSize: 11, marginLeft: 'auto' }}>+ Map mailbox →</span>
+                <span style={{ color: 'var(--accent)', fontSize: 11, marginLeft: 'auto' }}>View →</span>
               </div>
             );
           })}

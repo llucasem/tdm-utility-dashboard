@@ -53,7 +53,9 @@ export default function RentStatsRow({ monthPayments, prevMonthPayments }) {
           {unassigned}
         </div>
         <div className="stat-sub">
-          {unassigned === 0 ? 'all mapped ✓' : 'click row to assign'}
+          {unassigned === 0
+            ? 'all mapped ✓'
+            : <a href="/admin/landlords" style={{ color: 'var(--accent)' }}>configure landlords →</a>}
         </div>
       </div>
     </div>

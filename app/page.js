@@ -14,7 +14,6 @@ import AnalyticsModal        from '@/components/AnalyticsModal';
 import RentStatsRow          from '@/components/RentStatsRow';
 import RentTable             from '@/components/RentTable';
 import RentDetailModal       from '@/components/RentDetailModal';
-import AssignMailboxModal    from '@/components/AssignMailboxModal';
 
 const DUE_MONTH_MAP = { Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12' };
 
@@ -30,7 +29,6 @@ export default function Dashboard() {
   const [selectedBill,     setSelectedBill]     = useState(null);
   const [assignBill,       setAssignBill]       = useState(null);
   const [selectedPayment,  setSelectedPayment]  = useState(null);
-  const [assignPayment,    setAssignPayment]    = useState(null);
   const [darkMode,         setDarkMode]         = useState(false);
   const [toast,            setToast]            = useState(false);
   const [toastMsg,         setToastMsg]         = useState('');
@@ -151,18 +149,6 @@ export default function Dashboard() {
     }
   };
 
-  const handleMailboxAssigned = async (result) => {
-    await fetchRentPayments();
-    const newly = result?.newlyAssigned || 0;
-    const re    = result?.reassigned    || 0;
-    const parts = [];
-    if (newly > 0) parts.push(`${newly} newly assigned`);
-    if (re > 0)    parts.push(`${re} corrected`);
-    const msg = parts.length > 0
-      ? `Mailbox mapped · ${parts.join(' · ')}`
-      : 'Mailbox mapped to property';
-    showToast(msg);
-  };
 
   const prevMonthIndex = monthIndex === 0 ? 11 : monthIndex - 1;
   const prevYear       = monthIndex === 0 ? year - 1 : year;
@@ -248,7 +234,6 @@ export default function Dashboard() {
           <RentTable
             filtered={filteredPayments}
             onSelectPayment={setSelectedPayment}
-            onAssignPayment={setAssignPayment}
           />
         </section>
       )}
@@ -280,12 +265,6 @@ export default function Dashboard() {
       <RentDetailModal
         payment={selectedPayment}
         onClose={() => setSelectedPayment(null)}
-      />
-      <AssignMailboxModal
-        payment={assignPayment}
-        properties={properties}
-        onClose={() => setAssignPayment(null)}
-        onAssigned={handleMailboxAssigned}
       />
     </div>
   );
