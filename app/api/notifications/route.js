@@ -1,4 +1,4 @@
-import { listNotifications, getUnreadCount, markAllRead } from '@/lib/notifier';
+import { listNotifications, getUnreadCount, markAllRead, createNotification } from '@/lib/notifier';
 
 /** GET /api/notifications  — list (with unread count) */
 export async function GET(request) {
@@ -25,6 +25,17 @@ export async function POST(request) {
     if (action === 'markAllRead') {
       const updated = await markAllRead();
       return Response.json({ ok: true, updated });
+    }
+    // End-to-end test of the alert pipeline: creates a real 'error'
+    // notification, which also fires the WhatsApp webhook (Jarvis).
+    // Reachable only with valid session or CRON_SECRET (middleware).
+    if (action === 'testAlert') {
+      const n = await createNotification({
+        type:    'error',
+        title:   '🧪 Test de alertas',
+        message: 'Prueba del canal de alertas dashboard → WhatsApp. Si lees esto en WhatsApp, el circuito de producción funciona.',
+      });
+      return Response.json({ ok: true, id: n.id });
     }
     return Response.json({ ok: false, error: 'Unknown action' }, { status: 400 });
   } catch (e) {
