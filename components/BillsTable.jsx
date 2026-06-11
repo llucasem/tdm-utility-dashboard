@@ -61,10 +61,11 @@ export default function BillsTable({ filtered, onSelectBill, onAssignBill }) {
     row.allBills.push(bill);
     const type = bill.type;
     if (SERVICES.includes(type)) {
-      // Keep first bill found for each service (duplicates in same month are rare)
-      if (!row.bills[type]) {
-        row.bills[type] = bill;
-      }
+      // Keep ALL bills per service. Two statements of the same service can
+      // land in the same month (e.g. after a sync backlog catch-up) — the old
+      // "first bill wins" rule silently hid the second one.
+      if (!row.bills[type]) row.bills[type] = [];
+      row.bills[type].push(bill);
     }
   }
 
@@ -88,9 +89,10 @@ export default function BillsTable({ filtered, onSelectBill, onAssignBill }) {
   });
 
   // Column totals
+  const sumCell = bills => (bills || []).reduce((s, b) => s + (b.amount || 0), 0);
   const colTotals = {};
   for (const svc of SERVICES) {
-    colTotals[svc] = rows.reduce((s, r) => s + (r.bills[svc]?.amount || 0), 0);
+    colTotals[svc] = rows.reduce((s, r) => s + sumCell(r.bills[svc]), 0);
   }
   const grandTotal = SERVICES.reduce((s, svc) => s + colTotals[svc], 0);
 
@@ -120,30 +122,36 @@ export default function BillsTable({ filtered, onSelectBill, onAssignBill }) {
 
           {/* Data rows */}
           {rows.map((row, i) => {
-            const rowTotal = SERVICES.reduce((s, svc) => s + (row.bills[svc]?.amount || 0), 0);
+            const rowTotal = SERVICES.reduce((s, svc) => s + sumCell(row.bills[svc]), 0);
             return (
               <div key={i} className="matrix-row">
                 <span className="td-property">{row.property}</span>
                 <span className="td mono">{row.unit || '—'}</span>
                 <span className="td mono" style={{ fontSize: 13, color: 'var(--text2)' }}>{row.firstDate || '—'}</span>
                 {SERVICES.map(svc => {
-                  const bill = row.bills[svc];
-                  if (!bill) return (
+                  const cellBills = row.bills[svc];
+                  if (!cellBills || cellBills.length === 0) return (
                     <span key={svc} className="matrix-cell-empty">—</span>
                   );
+                  // Stack every bill of this service in the cell — each one
+                  // stays individually clickable so the detail modal works.
                   return (
-                    <span
-                      key={svc}
-                      className="matrix-cell"
-                      onClick={() => onSelectBill(bill)}
-                    >
-                      <span className="matrix-cell-amount">
-                        {fmt(bill.amount)}
-                        <AnomalyBadge bill={bill} />
-                        <MatchBadge bill={bill} />
-                        <TagBadge status={bill.qbTagStatus} />
-                      </span>
-                      <span className="matrix-cell-account">·····{bill.account}</span>
+                    <span key={svc} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {cellBills.map(bill => (
+                        <span
+                          key={bill.id}
+                          className="matrix-cell"
+                          onClick={() => onSelectBill(bill)}
+                        >
+                          <span className="matrix-cell-amount">
+                            {fmt(bill.amount)}
+                            <AnomalyBadge bill={bill} />
+                            <MatchBadge bill={bill} />
+                            <TagBadge status={bill.qbTagStatus} />
+                          </span>
+                          <span className="matrix-cell-account">·····{bill.account}</span>
+                        </span>
+                      ))}
                     </span>
                   );
                 })}

@@ -33,32 +33,74 @@ export async function GET() {
       // Payment confirmations / scheduling
       'automatic monthly payment is scheduled',
       'your payment is scheduled',
-      'thanks for paying your con edison bill',
+      'thanks for paying',
       'thank you for your payment',
       'we\'ve received your payment',
-      'payment received (confirmation)',
+      'one-time payment confirmation',
       'order confirmation',
       'automatic payment declined',
+      'issue with your automatic monthly payment',
       'autopay was successful',
       'autopay payment',
+      'your request to sign up for auto pay',
       // Surveys & feedback
       'your opinion matters',
       'values your feedback',
       'annual survey',
+      'your outage experience',
       // Marketing / upsell
       'get internet speed',
       'get a connection that keeps up',
       'enhance your connection',
       'entertainment that moves',
+      'free spectrum mobile line',
+      // Account / service operations (no billing info)
+      'your verification code',
+      'service alert',
+      'power outage',
+      'service is restored',
+      'please return your spectrum equipment',
+      'work notice',
+      'canceled service appointment',
+      'scheduled your service appointment',
+      'welcome to spectrum notifications',
+      'changes have been made to your account',
+      'you have a credit on your bill',
       // Generic announcements that don't carry billing info
       'california climate credit timing update',
+      'notice of cpuc',
     ];
 
-    // Sender patterns that are marketing-only (never carry real bills)
+    // Sender patterns that are marketing-only (never carry real bills).
+    // NOTE: LADWP must NEVER be skipped — their "Payment Received" emails are
+    // the only billing signal LADWP sends (no "bill ready" emails exist).
     const SKIP_SENDERS = [
       'spectrum customer experience team',
       'spectrum@exchange.spectrum',  // marketing list
+      'sce-feedback@feedback.sce.com', // SCE surveys
     ];
+
+    // Cap on Claude calls per invocation. Fetching/discarding noise is cheap
+    // (~0.2s each) but each parse costs 2-3s — this cap is what keeps the
+    // function under Vercel's 60s limit. Noise beyond the cap still gets
+    // persisted, so every run permanently shrinks the backlog.
+    const MAX_PARSES_PER_RUN = 10;
+    let parseCount = 0;
+
+    // Persist a noise email as a 0-amount row so it is never re-fetched.
+    // CRITICAL: without this insert, skipped emails come back from Gmail on
+    // every run and permanently hog the per-run slots (the bug that starved
+    // out real bills during May 2026).
+    async function persistNoise(email, reason) {
+      await pool.query(
+        `INSERT INTO utility_bills
+           (gmail_message_id, utility_type, amount_due, email_received_at, email_subject, email_from, status)
+         VALUES ($1, 'other', 0, $2, $3, $4, 'pending')
+         ON CONFLICT (gmail_message_id) DO NOTHING`,
+        [email.id, email.date, email.subject, email.from || null]
+      );
+      results.push({ id: email.id, status: 'skipped', reason });
+    }
 
     for (const email of emails) {
       // Skip known payment-confirmation / marketing / survey emails before
@@ -66,13 +108,21 @@ export async function GET() {
       const subjectLower = (email.subject || '').toLowerCase();
       const fromLower    = (email.from    || '').toLowerCase();
       if (SKIP_SUBJECTS.some(s => subjectLower.includes(s))) {
-        results.push({ id: email.id, status: 'skipped', reason: `noise filter: subject contains "${SKIP_SUBJECTS.find(s => subjectLower.includes(s))}"` });
+        await persistNoise(email, `noise filter: subject contains "${SKIP_SUBJECTS.find(s => subjectLower.includes(s))}"`);
         continue;
       }
       if (SKIP_SENDERS.some(s => fromLower.includes(s))) {
-        results.push({ id: email.id, status: 'skipped', reason: `noise filter: sender is marketing list` });
+        await persistNoise(email, 'noise filter: sender is marketing list');
         continue;
       }
+
+      // Parse budget exhausted — leave this (non-noise) email for the next
+      // run. No row is inserted, so Gmail will return it again.
+      if (parseCount >= MAX_PARSES_PER_RUN) {
+        results.push({ id: email.id, status: 'deferred', reason: 'parse budget for this run exhausted' });
+        continue;
+      }
+      parseCount++;
 
       // 1. Parse with Claude (PDF if attached, otherwise email body)
       let parsed;
@@ -162,12 +212,14 @@ export async function GET() {
         if (dup.rowCount > 0) isDuplicate = true;
       }
 
-      // 3. Save to Neon — ON CONFLICT skips duplicates atomically
+      // 3. Save to Neon — ON CONFLICT skips duplicates atomically.
+      // __paid: LADWP payment confirmations are the only bill record LADWP
+      // sends — the autopay already went through, so they arrive as 'paid'.
       const res = await pool.query(
         `INSERT INTO utility_bills
            (gmail_message_id, utility_type, property_address, unit, account_last4,
             amount_due, due_date, email_received_at, email_subject, email_from, status, is_duplicate)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
          ON CONFLICT (gmail_message_id) DO NOTHING
          RETURNING id, property_address`,
         [
@@ -181,6 +233,7 @@ export async function GET() {
           email.date,
           email.subject,
           email.from           || null,
+          parsed.__paid ? 'paid' : 'pending',
           isDuplicate,
         ]
       );
@@ -198,9 +251,10 @@ export async function GET() {
       await new Promise(r => setTimeout(r, 500));
     }
 
-    const saved   = results.filter(r => r.status === 'saved').length;
-    const skipped = results.filter(r => r.status === 'skipped').length;
-    const errors  = results.filter(r => r.status === 'error').length;
+    const saved    = results.filter(r => r.status === 'saved').length;
+    const skipped  = results.filter(r => r.status === 'skipped').length;
+    const errors   = results.filter(r => r.status === 'error').length;
+    const deferred = results.filter(r => r.status === 'deferred').length;
 
     // QuickBooks match for ALL new bills (independent of property). The result
     // is persisted in utility_bills.qb_match_* so the dashboard shows badges
@@ -285,7 +339,7 @@ export async function GET() {
     await endHeartbeat(hb, { ok: errors === 0 && !autoTagStats?.error });
     return Response.json({
       ok: true,
-      saved, skipped, errors, results,
+      saved, skipped, errors, deferred, results,
       match: matchStats,
       autoTag: autoTagStats,
       airtable: airtableStats,

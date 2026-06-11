@@ -9,7 +9,8 @@ Replaces the manual process of logging into 50+ utility accounts one by one. The
 - **Tabs** by utility type: Electricity, Internet, Gas, Rent, Insurance, Other
 - **Monthly view** — all stats, counts, and tables filtered by selected month
 - **Account mapping** — map utility account numbers to properties once; all current and future bills update automatically
-- **Sync** — manual sync button + automatic daily cron job
+- **Sync** — manual sync button + GitHub Actions every 2h (`.github/workflows/sync.yml`, auth via `CRON_SECRET`) + daily Vercel cron as fallback. Each run fetches up to 50 new emails (90-day rolling window) and parses up to 10 with Claude; noise is persisted as 0-amount rows so it never re-consumes quota. A staleness alarm fires if sync hasn't run in >12h.
+- **LADWP** — payment confirmations (the only email LADWP sends) are ingested as bills with status `paid`
 - **QuickBooks export** — CSV export compatible with QuickBooks
 - **Bill detail** — direct link to original Gmail email for each bill
 
@@ -20,7 +21,7 @@ Replaces the manual process of logging into 50+ utility accounts one by one. The
 | Frontend | Next.js 15, React 19 |
 | Database | Neon (PostgreSQL) |
 | Email source | Gmail API (OAuth 2.0) |
-| AI parser | Claude Haiku (`claude-haiku-4-5-20251001`) |
+| AI parser | Claude Sonnet (`claude-sonnet-4-6`) |
 | Accounting | QuickBooks Online API (Intuit) |
 | Deployment | Vercel |
 

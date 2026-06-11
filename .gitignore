@@ -41,3 +41,9 @@ backups/
 
 # Backfill / diagnostic logs
 backfill.log
+
+# Saved client emails and audit data exports — contain client billing data
+*.eml
+audit-gmail-sample-30d.json
+airtable-rent-classification.json
+audit-report-pipeline-2026-05-16.md

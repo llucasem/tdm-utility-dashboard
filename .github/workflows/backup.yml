@@ -1,0 +1,41 @@
+name: Daily DB backup
+
+on:
+  # Every day at 02:00 UTC (~04:00 in Madrid summer / 03:00 winter)
+  schedule:
+    - cron: '0 2 * * *'
+  # Manual trigger from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run backup
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          mkdir -p backups
+          node scripts/backup-db.mjs "backups/$(date -u +%Y-%m-%d_%H%M).json.gz"
+          ls -lh backups/
+
+      # Artifacts retain for 90 days by default — adjust as needed
+      - name: Upload backup as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-backup-${{ github.run_id }}
+          path: backups/*.json.gz
+          retention-days: 90

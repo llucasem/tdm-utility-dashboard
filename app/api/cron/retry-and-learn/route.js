@@ -35,6 +35,30 @@ export async function GET() {
   const summary = [];
   let hadError = false;
 
+  // ── 0. Sync staleness alarm ──────────────────────────────────────────
+  // The sync should run every ~2h (GitHub Actions) plus daily (Vercel cron).
+  // If its heartbeat is older than 12h, BOTH schedules are failing. This is
+  // the alarm that was missing in April-May 2026, when the sync silently
+  // stayed down for 28 days and a month of bills never reached the dashboard.
+  try {
+    const r = await pool.query(
+      `SELECT last_ran_at, NOW() - last_ran_at AS age FROM cron_heartbeats WHERE cron_name = 'sync'`
+    );
+    const ageHours = r.rows[0] ? (Date.now() - new Date(r.rows[0].last_ran_at).getTime()) / 3.6e6 : Infinity;
+    if (ageHours > 12) {
+      stats.syncStale = { lastRanAt: r.rows[0]?.last_ran_at || null, ageHours: Math.round(ageHours) };
+      summary.push(`🚨 sync has not run in ${Math.round(ageHours)}h`);
+      await createNotification({
+        type:    'error',
+        title:   `Sync is DOWN — last ran ${Math.round(ageHours)}h ago`,
+        message: `Neither the GitHub Actions schedule nor the Vercel cron has executed /api/sync in over 12 hours. New bills are NOT being ingested. Check GitHub Actions and the Vercel dashboard.`,
+        metadata: stats.syncStale,
+      });
+    }
+  } catch (e) {
+    stats.syncStale = { error: e.message };
+  }
+
   // ── 1. Match retries ─────────────────────────────────────────────────
   try {
     const r = await pool.query(`
