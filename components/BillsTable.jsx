@@ -15,13 +15,28 @@ function isMapped(b) {
   return b.property && !EMPTY_VALUES.includes(b.property.trim().toLowerCase());
 }
 
+// A recent not_found is NOT an error: the bank payment simply hasn't been
+// accepted into QuickBooks yet (Jake reviews the bank feed with a 2-4 week
+// lag). Show ⏳ for those; the real ✗ only appears when a bill is old enough
+// that its payment should long since be in QB.
+const QB_LAG_GRACE_DAYS = 45;
+
+function isWithinQbGrace(bill) {
+  if (!bill.dueRaw) return true;
+  return (Date.now() - new Date(bill.dueRaw).getTime()) / 86_400_000 <= QB_LAG_GRACE_DAYS;
+}
+
 function MatchBadge({ bill }) {
   const status = bill.qbMatchStatus;
   const count  = bill.qbMatchCount || 0;
   if (!status || status === 'pending' || status === 'skipped') return null;
   if (status === 'matched')   return <span className="qb-badge qb-ok"   title="1 match in QuickBooks">✓</span>;
   if (status === 'ambiguous') return <span className="qb-badge qb-warn" title={`${count} possible matches — review manually`}>⚠ {count}</span>;
-  if (status === 'not_found') return <span className="qb-badge qb-miss" title="No match found in QuickBooks">✗</span>;
+  if (status === 'not_found') {
+    return isWithinQbGrace(bill)
+      ? <span className="qb-badge qb-wait" title="Payment not in QuickBooks yet (pending bank-feed review) — retried nightly">⏳</span>
+      : <span className="qb-badge qb-miss" title={`No match found in QuickBooks after ${QB_LAG_GRACE_DAYS} days — needs a look`}>✗</span>;
+  }
   if (status === 'error')     return <span className="qb-badge qb-err"  title="QuickBooks lookup error — will retry">!</span>;
   return null;
 }

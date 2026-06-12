@@ -47,7 +47,9 @@ export default function BillDetailModal({ bill, onClose, year }) {
               </label>
 
               {bill.qbMatchStatus === 'not_found' && (
-                <p className="qb-match-empty">No matching transaction found in QuickBooks (±15 days).</p>
+                (!bill.dueRaw || (Date.now() - new Date(bill.dueRaw).getTime()) / 86_400_000 <= 45)
+                  ? <p className="qb-match-empty">⏳ Payment not in QuickBooks yet — it's likely still pending bank-feed review. Retried automatically every night.</p>
+                  : <p className="qb-match-warn">✗ No matching transaction found in QuickBooks after 45 days — worth a manual look.</p>
               )}
 
               {bill.qbMatchStatus === 'error' && (

@@ -239,9 +239,11 @@ body.dark .toggle-thumb { transform: translateX(18px); }
 .qb-ok    { background: #d6e9d4; color: #2e6b27; }
 .qb-warn  { background: #f6e8c1; color: #8a6418; }
 .qb-miss  { background: #f1d6d6; color: #8a2828; opacity: 0.6; }
+.qb-wait  { background: var(--surface2); color: var(--text3); opacity: 0.8; cursor: help; }
 body.dark .qb-ok   { background: #2a4a26; color: #b8e0b3; }
 body.dark .qb-warn { background: #4a3d18; color: #e8d49a; }
 body.dark .qb-miss { background: #4a2626; color: #e0b3b3; }
+body.dark .qb-wait { background: var(--surface2); color: var(--text3); }
 
 /* ── QuickBooks Class auto-tag badges ── */
 .qb-tag { display: inline-block; margin-left: 4px; font-size: 11px; vertical-align: middle; cursor: help; }
