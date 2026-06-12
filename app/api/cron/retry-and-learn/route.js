@@ -29,7 +29,14 @@ export const maxDuration = 60;
  * Scheduled at 02:00 UTC — gives QB activity time to settle from the
  * previous day before retrying.
  */
-export async function GET() {
+export async function GET(request) {
+  // Optional overrides for manual deep passes (defaults = nightly behaviour):
+  //   ?matchLimit=200   retry up to N bills instead of 20
+  //   ?sinceDays=120    learn/link from QB classes going back N days (default 60)
+  const params     = request?.nextUrl?.searchParams;
+  const matchLimit = Math.min(parseInt(params?.get('matchLimit') || '20', 10) || 20, 500);
+  const sinceDays  = Math.min(parseInt(params?.get('sinceDays')  || '60', 10) || 60, 365);
+
   const hb = startHeartbeat('retry-and-learn');
   const stats = {};
   const summary = [];
@@ -65,10 +72,11 @@ export async function GET() {
       SELECT id FROM utility_bills
       WHERE qb_match_status IN ('pending', 'not_found', 'error')
         AND amount_due IS NOT NULL AND amount_due > 0
+        AND NOT is_duplicate
         AND COALESCE(due_date, email_received_at) > NOW() - INTERVAL '90 days'
       ORDER BY due_date DESC NULLS LAST
-      LIMIT 20
-    `);
+      LIMIT $1
+    `, [matchLimit]);
     const ids = r.rows.map(x => x.id);
     stats.match = ids.length > 0 ? await matchBatch(ids) : { skipped: 0 };
     if (stats.match.matched)   summary.push(`✓ ${stats.match.matched} match resolved`);
@@ -127,7 +135,7 @@ export async function GET() {
   // older bills (reconciliation), and 14 days was missing them. 60 days
   // covers a full monthly reconciliation cycle.
   try {
-    stats.jakeSync = await linkBillsFromRecentClasses({ sinceDays: 60 });
+    stats.jakeSync = await linkBillsFromRecentClasses({ sinceDays });
     if (stats.jakeSync.linked)         summary.push(`🔗 ${stats.jakeSync.linked} bills linked from Jake`);
     if (stats.jakeSync.relinked)       summary.push(`↻ ${stats.jakeSync.relinked} relinked`);
     if (stats.jakeSync.property_filled) summary.push(`+ ${stats.jakeSync.property_filled} properties auto-filled`);
@@ -163,22 +171,26 @@ export async function GET() {
 
   // ── 4d. Maintenance: backfill duplicate flag on legacy bills ─────────
   // The dedup logic in the sync route only catches new bills going forward.
-  // This sweep catches the legacy ones (same utility_type + account_last4 +
-  // amount within ±10 days, keep the oldest, mark the rest as duplicate).
+  // This sweep flags any bill that has an OLDER visible twin (same
+  // utility_type + account_last4 + amount) within 18 days — the window that
+  // covers ConEd "Ready"→"Due" reminders (12-14d), LADWP (11d) and Spectrum
+  // (8d) without touching real monthly cycles (28-31d). The old version
+  // partitioned by calendar week and missed every pair that crossed a week
+  // boundary (the June 2026 double-bills bug).
   try {
     const r = await pool.query(`
-      WITH grouped AS (
-        SELECT id, ROW_NUMBER() OVER (
-          PARTITION BY utility_type, account_last4, ROUND(amount_due::numeric, 2),
-                       date_trunc('week', email_received_at)
-          ORDER BY email_received_at
-        ) AS rn
-        FROM utility_bills
-        WHERE amount_due > 0 AND account_last4 IS NOT NULL AND account_last4 != ''
-          AND NOT is_duplicate
-      )
-      UPDATE utility_bills SET is_duplicate = true
-      WHERE id IN (SELECT id FROM grouped WHERE rn > 1)
+      UPDATE utility_bills b SET is_duplicate = true
+      WHERE b.amount_due > 0 AND b.account_last4 IS NOT NULL AND b.account_last4 != ''
+        AND NOT b.is_duplicate
+        AND EXISTS (
+          SELECT 1 FROM utility_bills a
+          WHERE a.utility_type = b.utility_type
+            AND a.account_last4 = b.account_last4
+            AND ROUND(a.amount_due::numeric, 2) = ROUND(b.amount_due::numeric, 2)
+            AND NOT a.is_duplicate
+            AND a.email_received_at < b.email_received_at
+            AND b.email_received_at - a.email_received_at <= INTERVAL '18 days'
+        )
     `);
     if (r.rowCount > 0) {
       stats.duplicatesFlagged = r.rowCount;

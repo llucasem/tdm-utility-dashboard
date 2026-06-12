@@ -58,6 +58,7 @@ export async function GET() {
               is_anomaly, anomaly_baseline, anomaly_ratio
        FROM utility_bills
        WHERE amount_due IS NOT NULL AND amount_due > 0
+         AND NOT is_duplicate
        ORDER BY email_received_at DESC NULLS LAST, created_at DESC`
     );
 

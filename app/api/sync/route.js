@@ -193,18 +193,22 @@ export async function GET() {
         }
       }
 
-      // 2.5 — DEDUP rule (system_lesson "Spectrum/ConEd send 2 emails per
-      // bill"): if we already saved a bill with the same (utility_type,
-      // account_last4, amount_due) within ±10 days, mark this one as
-      // duplicate so it doesn't pollute the dashboard or matcher.
+      // 2.5 — DEDUP rule: providers send several emails for the SAME bill —
+      // ConEd "Bill Is Ready" + "Bill Is Due" reminder 12-14 days later,
+      // LADWP "Bill Available" + "Payment Received" ~11 days later, Spectrum
+      // "Statement Ready" + "Payment Scheduled" ~8 days later. If we already
+      // saved a bill with the same (utility_type, account_last4, amount_due)
+      // within ±18 days, mark this one as duplicate. 18 days catches every
+      // known reminder pattern while staying clear of real monthly cycles
+      // (28-31 days apart even for fixed-amount Spectrum plans).
       let isDuplicate = false;
       if (parsed.account_last4 && parsed.amount_due && parsed.utility_type) {
         const dup = await pool.query(
           `SELECT id FROM utility_bills
             WHERE utility_type = $1 AND account_last4 = $2
               AND ROUND(amount_due::numeric, 2) = ROUND($3::numeric, 2)
-              AND email_received_at BETWEEN $4::timestamptz - INTERVAL '10 days'
-                                       AND $4::timestamptz + INTERVAL '10 days'
+              AND email_received_at BETWEEN $4::timestamptz - INTERVAL '18 days'
+                                       AND $4::timestamptz + INTERVAL '18 days'
               AND NOT is_duplicate
             LIMIT 1`,
           [parsed.utility_type, parsed.account_last4, parsed.amount_due, email.date]
