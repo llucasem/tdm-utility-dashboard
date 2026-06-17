@@ -80,12 +80,19 @@ export async function GET() {
       'sce-feedback@feedback.sce.com', // SCE surveys
     ];
 
-    // Cap on Claude calls per invocation. Fetching/discarding noise is cheap
-    // (~0.2s each) but each parse costs 2-3s — this cap is what keeps the
-    // function under Vercel's 60s limit. Noise beyond the cap still gets
-    // persisted, so every run permanently shrinks the backlog.
+    // Two independent guards keep the function under Vercel's 60s hard kill
+    // (HTTP 504 / FUNCTION_INVOCATION_TIMEOUT):
+    //   1. MAX_PARSES_PER_RUN — cap on Claude calls (noise is free, parses
+    //      cost 2-4s each with Sonnet).
+    //   2. PARSE_DEADLINE_MS — wall-clock budget. A heavy run (big PDFs, slow
+    //      Claude) can blow 60s well before hitting the parse cap, so we stop
+    //      starting new parses at 42s and leave ~18s for the QB match +
+    //      auto-tag + Airtable tail. Whatever's left is deferred to the next
+    //      run (every 2h via GitHub Actions) — nothing is lost.
     const MAX_PARSES_PER_RUN = 10;
+    const PARSE_DEADLINE_MS  = 42_000;
     let parseCount = 0;
+    const elapsed = () => Date.now() - hb.startTime;
 
     // Persist a noise email as a 0-amount row so it is never re-fetched.
     // CRITICAL: without this insert, skipped emails come back from Gmail on
@@ -116,10 +123,14 @@ export async function GET() {
         continue;
       }
 
-      // Parse budget exhausted — leave this (non-noise) email for the next
-      // run. No row is inserted, so Gmail will return it again.
-      if (parseCount >= MAX_PARSES_PER_RUN) {
-        results.push({ id: email.id, status: 'deferred', reason: 'parse budget for this run exhausted' });
+      // Budget exhausted (count OR wall-clock) — leave this (non-noise) email
+      // for the next run. No row is inserted, so Gmail returns it again.
+      if (parseCount >= MAX_PARSES_PER_RUN || elapsed() > PARSE_DEADLINE_MS) {
+        results.push({
+          id: email.id,
+          status: 'deferred',
+          reason: parseCount >= MAX_PARSES_PER_RUN ? 'parse count budget exhausted' : 'parse time budget exhausted',
+        });
         continue;
       }
       parseCount++;
@@ -325,19 +336,27 @@ export async function GET() {
     }
 
     // ── Airtable sync (rent payments + Conservice utilities) ───────────
-    // Runs after Gmail so the same /api/sync handles everything in 60s.
-    // We cap to 15 records per run to stay well under the Hobby 60s limit
-    // when combined with the Gmail half.
+    // Runs after Gmail in the same function. Its record limit is scaled to
+    // the time LEFT in the 60s budget (each record can cost a Claude call):
+    // if the Gmail half was heavy, Airtable does fewer (or zero) records this
+    // run and the rest waits for the next one. This is what stopped the
+    // occasional HTTP 504 — the two halves no longer blindly add up past 60s.
     let airtableStats = null;
-    try {
-      airtableStats = await syncAirtable({ limit: 15 });
-    } catch (e) {
-      airtableStats = { ok: false, error: e.message };
-      await createNotification({
-        type:    'error',
-        title:   'Airtable sync failed',
-        message: `Could not run Airtable rent sync: ${e.message}`,
-      });
+    const remainingMs = 55_000 - elapsed();
+    if (remainingMs < 8_000) {
+      airtableStats = { ok: true, skipped: 'deferred — sync time budget spent on Gmail this run' };
+    } else {
+      const limit = Math.max(1, Math.min(15, Math.floor(remainingMs / 3_000)));
+      try {
+        airtableStats = await syncAirtable({ limit });
+      } catch (e) {
+        airtableStats = { ok: false, error: e.message };
+        await createNotification({
+          type:    'error',
+          title:   'Airtable sync failed',
+          message: `Could not run Airtable rent sync: ${e.message}`,
+        });
+      }
     }
 
     await endHeartbeat(hb, { ok: errors === 0 && !autoTagStats?.error });
