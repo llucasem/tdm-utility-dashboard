@@ -6,6 +6,7 @@ import ViewTabs             from '@/components/ViewTabs';
 import StatsRow              from '@/components/StatsRow';
 import FiltersBar            from '@/components/FiltersBar';
 import BillsTable            from '@/components/BillsTable';
+import ExpectedPanel         from '@/components/ExpectedPanel';
 import BillDetailModal       from '@/components/BillDetailModal';
 import AddBillModal          from '@/components/AddBillModal';
 import AssignPropertyModal   from '@/components/AssignPropertyModal';
@@ -213,6 +214,11 @@ export default function Dashboard() {
             onNext={nextMonth}
             search={search}
             onSearch={setSearch}
+          />
+          <ExpectedPanel
+            monthIndex={monthIndex}
+            year={year}
+            refreshTick={bills.length}
           />
           <BillsTable
             filtered={filtered}

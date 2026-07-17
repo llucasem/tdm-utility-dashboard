@@ -2,6 +2,7 @@ import pool from '@/lib/db';
 import { matchBatch } from '@/lib/qb-match';
 import { autoTagBatch } from '@/lib/auto-tag';
 import { runLearningPass, linkBillsFromRecentClasses } from '@/lib/class-learner';
+import { backfillBillsFromQB } from '@/lib/qb-backfill';
 import { refreshLearnedVendors, refreshLearnedBankAccounts } from '@/lib/known-vendors';
 import { createNotification } from '@/lib/notifier';
 import { startHeartbeat, endHeartbeat } from '@/lib/heartbeat';
@@ -141,6 +142,20 @@ export async function GET(request) {
     if (stats.jakeSync.property_filled) summary.push(`+ ${stats.jakeSync.property_filled} properties auto-filled`);
   } catch (e) {
     stats.jakeSync = { error: e.message };
+    hadError = true;
+  }
+
+  // ── 4e. Backfill bills from QB for accounts that never email ─────────
+  // SCE/AT&T/T-Mobile/... send no notification email; their payments only
+  // exist in QB (classed by Jake). Create the missing dashboard bills so
+  // Jake stops logging into provider portals to check them.
+  try {
+    // Short window on purpose: new payments only appear as Jake accepts the
+    // bank feed (~3-4 week lag), and the whole cron must fit Vercel's 60s.
+    stats.qbBackfill = await backfillBillsFromQB({ sinceDays: Math.min(sinceDays, 35), maxCreates: 15 });
+    if (stats.qbBackfill.created) summary.push(`📥 ${stats.qbBackfill.created} bills desde QB`);
+  } catch (e) {
+    stats.qbBackfill = { error: e.message };
     hadError = true;
   }
 

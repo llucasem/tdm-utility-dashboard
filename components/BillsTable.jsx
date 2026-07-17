@@ -164,7 +164,9 @@ export default function BillsTable({ filtered, onSelectBill, onAssignBill }) {
                             <MatchBadge bill={bill} />
                             <TagBadge status={bill.qbTagStatus} />
                           </span>
-                          <span className="matrix-cell-account">·····{bill.account}</span>
+                          <span className="matrix-cell-account">
+                            {bill.source === 'qb' ? 'via QuickBooks' : `·····${bill.account}`}
+                          </span>
                         </span>
                       ))}
                     </span>

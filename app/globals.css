@@ -435,3 +435,61 @@ body.dark .rent-paid-check { color: #9ae694; }
 .qbc-row { display: grid; grid-template-columns: 2.5fr 0.6fr 1.6fr 2fr 1fr; padding: 10px 14px; border-bottom: 1px solid var(--border); align-items: center; gap: 12px; }
 .qbc-row:last-child { border-bottom: none; }
 .qbc-header { background: var(--surface2); font-family: 'Lora', serif; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--text3); }
+
+/* ── Expected-accounts panel ("what should exist this month") ── */
+.expected-ok {
+  font-family: 'Lora', serif;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text3);
+  padding: 8px 4px 14px;
+}
+.expected-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 18px;
+  overflow: hidden;
+}
+.expected-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 16px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  font-family: 'Lora', serif;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.expected-coming {
+  font-weight: 400;
+  font-style: italic;
+  color: var(--text3);
+  font-size: 12px;
+}
+.expected-chevron { color: var(--text3); font-size: 12px; }
+.expected-row {
+  display: grid;
+  grid-template-columns: 2.4fr 0.7fr 1fr 1fr 0.9fr 1.8fr;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--border);
+  font-family: 'Lora', serif;
+  font-size: 12px;
+  color: var(--text2);
+}
+.expected-row:last-child { border-bottom: none; }
+.expected-prop { color: var(--text); font-weight: 700; }
+.expected-row .mono { font-family: 'Inconsolata', monospace; font-size: 12px; }
+.expected-hint { font-style: italic; color: var(--text3); font-size: 11px; text-align: right; }
+@media (max-width: 880px) {
+  .expected-row { grid-template-columns: 2fr 0.6fr 1fr 1fr; }
+  .expected-row span:nth-child(5), .expected-row span:nth-child(6) { display: none; }
+}

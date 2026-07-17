@@ -15,7 +15,11 @@ export default function BillDetailModal({ bill, onClose, year }) {
           <div className="form-row">
             <div className="form-group">
               <label>Account</label>
-              <span className="form-value">·····{bill.account}</span>
+              <span className="form-value">
+                {bill.source === 'qb'
+                  ? <span style={{ fontStyle: 'italic', color: 'var(--text2)' }}>via QuickBooks</span>
+                  : <>·····{bill.account}</>}
+              </span>
             </div>
             <div className="form-group">
               <label>Amount due</label>

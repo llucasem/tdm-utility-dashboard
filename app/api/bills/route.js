@@ -29,7 +29,9 @@ function mapBillRow(row) {
     due:        formatDue(row.email_received_at) || formatDue(row.due_date) || '—',
     dueRaw:     filterDate ? filterDate.toISOString().slice(0, 10) : null,
     status:     row.status || 'pending',
-    gmailLink:  row.gmail_message_id && !String(row.gmail_message_id).startsWith('manual:')
+    gmailLink:  row.gmail_message_id
+      && !String(row.gmail_message_id).startsWith('manual:')
+      && !String(row.gmail_message_id).startsWith('qb:')
       ? `https://mail.google.com/mail/u/0/#all/${row.gmail_message_id}`
       : null,
     dueMonth:   filterDate ? filterDate.getUTCMonth() : null,
@@ -42,6 +44,7 @@ function mapBillRow(row) {
     qbMatchCount:   row.qb_match_count || 0,
     qbMatchData:    row.qb_match_data || [],
     qbMatchedAt:    row.qb_matched_at,
+    source:     row.source || 'email',
     isAnomaly:        row.is_anomaly || false,
     anomalyBaseline: row.anomaly_baseline ? Number(row.anomaly_baseline) : null,
     anomalyRatio:    row.anomaly_ratio ? Number(row.anomaly_ratio) : null,
@@ -52,7 +55,7 @@ export async function GET() {
   try {
     const result = await pool.query(
       `SELECT id, gmail_message_id, utility_type, property_address, unit, account_last4,
-              amount_due, due_date, email_received_at, email_subject, status,
+              amount_due, due_date, email_received_at, email_subject, status, source,
               qb_tag_status, qb_purchase_id, qb_class_id, qb_tagged_at,
               qb_match_status, qb_match_count, qb_match_data, qb_matched_at,
               is_anomaly, anomaly_baseline, anomaly_ratio
@@ -137,7 +140,7 @@ export async function POST(request) {
     // Re-read so the response includes the freshly-persisted match/tag fields
     const refreshed = await pool.query(
       `SELECT id, gmail_message_id, utility_type, property_address, unit, account_last4,
-              amount_due, due_date, email_received_at, email_subject, status,
+              amount_due, due_date, email_received_at, email_subject, status, source,
               qb_tag_status, qb_purchase_id, qb_class_id, qb_tagged_at,
               qb_match_status, qb_match_count, qb_match_data, qb_matched_at,
               is_anomaly, anomaly_baseline, anomaly_ratio
