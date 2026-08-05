@@ -20,8 +20,17 @@ export async function GET() {
     const emails = await getUtilityEmails();
 
     if (emails.length === 0) {
+      // No Gmail work — but ALWAYS give Airtable its turn. The old early
+      // return here meant rent emails only processed when there also
+      // happened to be new utility emails.
+      let airtableStats = null;
+      try {
+        airtableStats = await syncAirtable({ limit: 15 });
+      } catch (e) {
+        airtableStats = { ok: false, error: e.message };
+      }
       await endHeartbeat(hb, { ok: true });
-      return Response.json({ ok: true, saved: 0, message: 'No new emails in the Utilities folder.' });
+      return Response.json({ ok: true, saved: 0, airtable: airtableStats, message: 'No new emails in the Utilities folder.' });
     }
 
     const results = [];
