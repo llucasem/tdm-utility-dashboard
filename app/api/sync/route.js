@@ -134,8 +134,22 @@ export async function GET() {
         const bodyText = (email.body || email.snippet || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
         const found = [...bodyText.matchAll(/-?\$([\d,]+\.\d{2})\s+(\d{2})\/(\d{2})\/(\d{4})/g)]
           .map(m => ({ amount: parseFloat(m[1].replace(/,/g, '')), due: `${m[4]}-${m[2]}-${m[3]}` }));
-        const unique = [...new Map(found.map(f => [`${f.amount}|${f.due}`, f])).values()]
+        let unique = [...new Map(found.map(f => [`${f.amount}|${f.due}`, f])).values()]
           .filter(f => f.amount > 0);
+        // Balance LADDER detection: a delinquent account's statement lists its
+        // balance month by month — same due date, amounts climbing by a
+        // near-constant step (e.g. 472 9th 4FL: $226→$648 in ~$38 steps).
+        // Those are snapshots of ONE debt, not N separate bills: keep only
+        // the latest (highest) balance.
+        if (unique.length >= 3 && new Set(unique.map(f => f.due)).size === 1) {
+          const sorted = unique.map(f => f.amount).sort((a, b) => a - b);
+          const steps = sorted.slice(1).map((v, i) => v - sorted[i]);
+          const medStep = steps.slice().sort((a, b) => a - b)[Math.floor(steps.length / 2)];
+          const ladder = medStep > 0 && steps.every(s => Math.abs(s - medStep) <= Math.max(15, medStep * 0.4));
+          if (ladder) {
+            unique = [unique.reduce((a, b) => (b.amount > a.amount ? b : a))];
+          }
+        }
         if (unique.length >= 2 || (unique.length === 1 && found.length >= 2)) {
           let inserted = 0;
           for (let k = 0; k < unique.length; k++) {
