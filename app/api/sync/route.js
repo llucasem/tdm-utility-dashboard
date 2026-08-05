@@ -123,6 +123,54 @@ export async function GET() {
         continue;
       }
 
+      // ConEd CONSOLIDATED statements (new template, July 2026): ONE email
+      // containing MANY bills ("Amount Due / Due Date" repeated N times, all
+      // under a masked master account). Claude's one-bill-per-email parser
+      // chokes on these, so extract them deterministically with a regex and
+      // insert one row per bill. The template repeats the same mailing
+      // address for every line, so rows go in UNASSIGNED — the QB matcher
+      // adopts the property once Jake's classed payment appears.
+      if (subjectLower.includes('con edison bill is ready')) {
+        const bodyText = (email.body || email.snippet || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+        const found = [...bodyText.matchAll(/-?\$([\d,]+\.\d{2})\s+(\d{2})\/(\d{2})\/(\d{4})/g)]
+          .map(m => ({ amount: parseFloat(m[1].replace(/,/g, '')), due: `${m[4]}-${m[2]}-${m[3]}` }));
+        const unique = [...new Map(found.map(f => [`${f.amount}|${f.due}`, f])).values()]
+          .filter(f => f.amount > 0);
+        if (unique.length >= 2 || (unique.length === 1 && found.length >= 2)) {
+          let inserted = 0;
+          for (let k = 0; k < unique.length; k++) {
+            const f = unique[k];
+            // Reminder guard: same amount+type already ingested <18 days back
+            const dup = await pool.query(`
+              SELECT 1 FROM utility_bills
+              WHERE utility_type = 'electricity'
+                AND ROUND(amount_due::numeric, 2) = ROUND($1::numeric, 2)
+                AND NOT is_duplicate
+                AND email_received_at BETWEEN $2::timestamptz - INTERVAL '18 days' AND $2::timestamptz
+              LIMIT 1
+            `, [f.amount.toFixed(2), email.date]);
+            if (dup.rowCount > 0) continue;
+            await pool.query(
+              `INSERT INTO utility_bills
+                 (gmail_message_id, utility_type, amount_due, due_date, email_received_at,
+                  email_subject, email_from, status)
+               VALUES ($1, 'electricity', $2, $3, $4, $5, $6, 'pending')
+               ON CONFLICT (gmail_message_id) DO NOTHING`,
+              [k === 0 ? email.id : `${email.id}#${k}`, f.amount.toFixed(2), f.due,
+               email.date, email.subject, email.from || null]
+            );
+            inserted++;
+          }
+          // If every line was a reminder-duplicate, still mark the email as
+          // processed so Gmail doesn't re-serve it forever.
+          if (inserted === 0) {
+            await persistNoise(email, 'ConEd consolidated: all lines already ingested');
+          }
+          results.push({ id: email.id, status: 'saved', reason: `ConEd consolidated: ${inserted}/${unique.length} bills` });
+          continue;
+        }
+      }
+
       // Budget exhausted (count OR wall-clock) — leave this (non-noise) email
       // for the next run. No row is inserted, so Gmail returns it again.
       if (parseCount >= MAX_PARSES_PER_RUN || elapsed() > PARSE_DEADLINE_MS) {

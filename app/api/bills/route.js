@@ -32,7 +32,9 @@ function mapBillRow(row) {
     gmailLink:  row.gmail_message_id
       && !String(row.gmail_message_id).startsWith('manual:')
       && !String(row.gmail_message_id).startsWith('qb:')
-      ? `https://mail.google.com/mail/u/0/#all/${row.gmail_message_id}`
+      // ConEd consolidated emails yield one row per bill ('<gmailId>#2'...) —
+      // strip the suffix so every row links to the same source email.
+      ? `https://mail.google.com/mail/u/0/#all/${String(row.gmail_message_id).split('#')[0]}`
       : null,
     dueMonth:   filterDate ? filterDate.getUTCMonth() : null,
     dueYear:    filterDate ? filterDate.getUTCFullYear() : null,

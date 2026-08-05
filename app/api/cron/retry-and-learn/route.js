@@ -43,6 +43,15 @@ export async function GET(request) {
   const summary = [];
   let hadError = false;
 
+  // Wall-clock budget: Vercel Hobby kills the function at 60s. When that
+  // happened mid-run (July 2026), everything after the kill silently never
+  // executed for WEEKS — no links, no backfill, no notification, no alarm.
+  // Reserve time for the summary/heartbeat tail and skip steps that no
+  // longer fit; a skipped step runs tomorrow, a killed run reports nothing.
+  const startedAt = Date.now();
+  const msLeft = () => (maxDuration * 1000) - 10_000 - (Date.now() - startedAt);
+  const skippedForTime = [];
+
   // ── 0. Sync staleness alarm ──────────────────────────────────────────
   // The sync should run every ~2h (GitHub Actions) plus daily (Vercel cron).
   // If its heartbeat is older than 12h, BOTH schedules are failing. This is
@@ -67,7 +76,32 @@ export async function GET(request) {
     stats.syncStale = { error: e.message };
   }
 
+  // ── 0b. Own staleness alarm ──────────────────────────────────────────
+  // The heartbeat is only written when a run COMPLETES. If this cron gets
+  // killed every night (60s timeout), the sync alarm above still fires
+  // nightly but nobody notices that matching/backfill are dead. >36h since
+  // the last COMPLETED run → error notification (→ WhatsApp).
+  try {
+    const r = await pool.query(
+      `SELECT last_ran_at FROM cron_heartbeats WHERE cron_name = 'retry-and-learn'`
+    );
+    const ageHours = r.rows[0] ? (Date.now() - new Date(r.rows[0].last_ran_at).getTime()) / 3.6e6 : 0;
+    if (ageHours > 36) {
+      summary.push(`🚨 retry-and-learn has not COMPLETED in ${Math.round(ageHours)}h`);
+      await createNotification({
+        type:    'error',
+        title:   `Nightly QB pass incomplete for ${Math.round(ageHours)}h`,
+        message: `retry-and-learn keeps starting but never finishing (probably killed by Vercel's 60s limit). Matching, auto-tag and QB backfill are NOT running to completion.`,
+        metadata: { ageHours: Math.round(ageHours) },
+      });
+    }
+  } catch (e) { /* non-fatal */ }
+
   // ── 1. Match retries ─────────────────────────────────────────────────
+  // Least-recently-tried FIRST. The old `due_date DESC` order retried the
+  // 20 NEWEST bills every night — exactly the ones whose payments can't be
+  // in QB yet — while older bills (whose payments HAD arrived) starved and
+  // stayed ✗ forever. New bills get their first attempt at sync time anyway.
   try {
     const r = await pool.query(`
       SELECT id FROM utility_bills
@@ -75,11 +109,19 @@ export async function GET(request) {
         AND amount_due IS NOT NULL AND amount_due > 0
         AND NOT is_duplicate
         AND COALESCE(due_date, email_received_at) > NOW() - INTERVAL '90 days'
-      ORDER BY due_date DESC NULLS LAST
+      ORDER BY qb_matched_at ASC NULLS FIRST
       LIMIT $1
     `, [matchLimit]);
     const ids = r.rows.map(x => x.id);
-    stats.match = ids.length > 0 ? await matchBatch(ids) : { skipped: 0 };
+    // Chunked so the wall-clock guard can stop between chunks instead of
+    // being killed mid-batch.
+    stats.match = { matched: 0, ambiguous: 0, not_found: 0, error: 0, skipped: 0, items: [] };
+    for (let i = 0; i < ids.length; i += 5) {
+      if (msLeft() < 15_000) { skippedForTime.push(`match (${ids.length - i} left)`); break; }
+      const part = await matchBatch(ids.slice(i, i + 5));
+      for (const k of ['matched', 'ambiguous', 'not_found', 'error', 'skipped']) stats.match[k] += part[k] || 0;
+      stats.match.items.push(...(part.items || []));
+    }
     if (stats.match.matched)   summary.push(`✓ ${stats.match.matched} match resolved`);
     if (stats.match.ambiguous) summary.push(`⚠ ${stats.match.ambiguous} ambiguous`);
     if (stats.match.error)     summary.push(`! ${stats.match.error} match errors`);
@@ -89,7 +131,8 @@ export async function GET(request) {
   }
 
   // ── 2. Auto-tag retries ──────────────────────────────────────────────
-  try {
+  if (msLeft() < 15_000) { skippedForTime.push('autoTag'); stats.autoTag = { skippedForTime: true }; }
+  else try {
     const r = await pool.query(`
       SELECT id FROM utility_bills
       WHERE qb_tag_status IN ('pending', 'not_found', 'error')
@@ -120,7 +163,8 @@ export async function GET(request) {
   }
 
   // ── 3. Learning pass (small window for speed) ────────────────────────
-  try {
+  if (msLeft() < 12_000) { skippedForTime.push('learn'); stats.learn = { skippedForTime: true }; }
+  else try {
     stats.learn = await runLearningPass({ sinceDays: 7 });
     if (stats.learn.created)   summary.push(`+ ${stats.learn.created} new mappings`);
     if (stats.learn.conflicts) summary.push(`⚠ ${stats.learn.conflicts} mapping conflicts`);
@@ -135,7 +179,8 @@ export async function GET(request) {
   // Window bumped 14 → 60 days (2026-06-09): Jake sometimes back-classes
   // older bills (reconciliation), and 14 days was missing them. 60 days
   // covers a full monthly reconciliation cycle.
-  try {
+  if (msLeft() < 15_000) { skippedForTime.push('jakeSync'); stats.jakeSync = { skippedForTime: true }; }
+  else try {
     stats.jakeSync = await linkBillsFromRecentClasses({ sinceDays });
     if (stats.jakeSync.linked)         summary.push(`🔗 ${stats.jakeSync.linked} bills linked from Jake`);
     if (stats.jakeSync.relinked)       summary.push(`↻ ${stats.jakeSync.relinked} relinked`);
@@ -149,7 +194,8 @@ export async function GET(request) {
   // SCE/AT&T/T-Mobile/... send no notification email; their payments only
   // exist in QB (classed by Jake). Create the missing dashboard bills so
   // Jake stops logging into provider portals to check them.
-  try {
+  if (msLeft() < 12_000) { skippedForTime.push('qbBackfill'); stats.qbBackfill = { skippedForTime: true }; }
+  else try {
     // Short window on purpose: new payments only appear as Jake accepts the
     // bank feed (~3-4 week lag), and the whole cron must fit Vercel's 60s.
     stats.qbBackfill = await backfillBillsFromQB({ sinceDays: Math.min(sinceDays, 35), maxCreates: 15 });
@@ -162,7 +208,8 @@ export async function GET(request) {
   // ── 4b. Refresh learned vendors + bank accounts (cheap) ──────────────
   // Aggregates payees and bank accounts seen in successfully tagged bills and
   // promotes the ones that appear ≥3 times to the known whitelist.
-  try {
+  if (msLeft() < 8_000) { skippedForTime.push('learnVendors'); stats.learnVendors = { skippedForTime: true }; }
+  else try {
     const v = await refreshLearnedVendors({ sinceDays: 180 });
     const a = await refreshLearnedBankAccounts({ sinceDays: 180 });
     stats.learnVendors  = v;
@@ -233,6 +280,10 @@ export async function GET(request) {
   }
 
   // ── Notification summary ─────────────────────────────────────────────
+  if (skippedForTime.length > 0) {
+    stats.skippedForTime = skippedForTime;
+    summary.push(`⏱ time budget: skipped ${skippedForTime.join(', ')}`);
+  }
   if (summary.length > 0) {
     await createNotification({
       type:    hadError ? 'warning' : 'success',
