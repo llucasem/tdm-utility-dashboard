@@ -1,11 +1,20 @@
 /**
- * Construye el REGISTRO DE CUENTAS: (proveedor, account_last4) -> propiedad + unidad.
+ * Construye el REGISTRO DE CUENTAS: (tipo de servicio, account_last4) -> propiedad + unidad.
  *
- * La idea: el numero de cuenta es la identidad. No se adivina cada mes,
- * se mira aqui. Este script deduce el registro desde el historial real de
- * Neon y marca el nivel de confianza de cada fila.
+ * La idea del reset: el numero de cuenta es la identidad. No se adivina en cada
+ * email, se mira aqui. Este script deduce el registro desde el historial real de
+ * Neon, lo corrobora contra las tablas viejas, y marca el nivel de confianza.
  *
- * Dry-run por defecto. Con --apply escribe en la tabla account_registry.
+ * Niveles de confianza:
+ *   solida       todas las observaciones del historial coinciden
+ *   mayoria      una domina (>=80%)
+ *   provisional  vista una sola vez; se confirma sola con la proxima factura
+ *   conflicto    el historial se contradice de verdad -> lo decide Jake
+ *   manual       resuelto a mano con evidencia; locked=true, no se pisa nunca
+ *
+ * Uso:
+ *   node scripts/build-account-registry.mjs            (dry-run, no escribe)
+ *   node scripts/build-account-registry.mjs --apply    (crea la tabla y escribe)
  */
 import fs from 'fs';
 import pg from 'pg';
@@ -18,32 +27,27 @@ const env = Object.fromEntries(
 
 const APPLY = process.argv.includes('--apply');
 
-// --- normalizacion -------------------------------------------------------
-// OJO: no se tocan los tokens direccionales (N/S/E/W). El normalizador viejo
-// se comia la S de WILSHIRE y dejaba "WIL HIRE".
-const STREET_ABBR = [
-  [/\bAVENUE\b/g, 'AVE'], [/\bSTREET\b/g, 'ST'], [/\bBOULEVARD\b/g, 'BLVD'],
-  [/\bROAD\b/g, 'RD'], [/\bDRIVE\b/g, 'DR'], [/\bPLACE\b/g, 'PL'],
-  [/\bCOURT\b/g, 'CT'], [/\bLANE\b/g, 'LN'], [/\bTERRACE\b/g, 'TER'],
-];
-
-export function normAddress(raw) {
-  if (!raw) return null;
-  let s = String(raw).split(',')[0];                 // solo la calle, sin ciudad/estado/zip
-  s = s.toUpperCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
-  for (const [re, to] of STREET_ABBR) s = s.replace(re, to);
-  return s.replace(/\s+/g, ' ').trim() || null;
-}
-
-export function normUnit(raw) {
-  if (raw === null || raw === undefined) return null;
-  let s = String(raw).toUpperCase().replace(/[.,#]/g, ' ').replace(/\s+/g, ' ').trim();
-  s = s.replace(/^(APARTMENT|APT|UNIT|STE|SUITE)\s*/,'').trim();
-  if (!s || s === '-' || s === 'NULL') return null;
-  return s;
-}
+import { normAddress, normUnit } from '../lib/account-registry.js';
 
 const key = (a, u) => `${a || '?'}|${u || '-'}`;
+
+// --- resoluciones a mano -------------------------------------------------
+// Los 3 conflictos que se resuelven con la propia evidencia del historial.
+// Se marcan locked: ninguna pasada automatica los volvera a tocar.
+const RESUELTOS = {
+  'internet|4449': {
+    address: '939 S BROADWAY', unit: '607',
+    notes: 'Resuelto 13/08/2026: 5 observaciones 607 vs 2 M03, y jun/jul/ago coinciden en 607. La alternancia era la IA adivinando.',
+  },
+  'internet|6715': {
+    address: '474 9TH AVE', unit: '4D',
+    notes: 'Resuelto 13/08/2026: 4 observaciones 474 9th #4D; 472 9th #3 y 360 W Pico eran despistes sueltos. Importe constante $100.',
+  },
+  'electricity|8467': {
+    address: '501 E 106TH ST', unit: '4',
+    notes: 'Resuelto 13/08/2026: la unidad #4 aparece en abr/may y se pierde al parsear desde junio. OJO: cuenta morosa, el saldo crece cada mes.',
+  },
+};
 
 // --- main ----------------------------------------------------------------
 const pool = new pg.Pool({ connectionString: env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
@@ -75,8 +79,8 @@ for (const b of bills) {
   const k = `${b.utility_type}|${b.account_last4}`;
   if (!acc.has(k)) acc.set(k, {
     utility_type: b.utility_type, account_last4: b.account_last4,
-    providers: new Map(), obs: new Map(), n: 0, first: b.email_received_at, last: b.email_received_at,
-    amounts: [],
+    providers: new Map(), obs: new Map(), n: 0,
+    first: b.email_received_at, last: b.email_received_at, amounts: [],
   });
   const a = acc.get(k);
   a.n++;
@@ -91,50 +95,144 @@ for (const b of bills) {
   const o = a.obs.get(ok); o.count++; o.last = b.email_received_at;
 }
 
+// --- corroboracion contra las tablas viejas ------------------------------
+const viejas = new Map();
+for (const t of ['account_mappings', 'provider_accounts']) {
+  for (const r of await q(`select utility_type, account_last4, property_address, unit from ${t}`)) {
+    const k = `${r.utility_type}|${r.account_last4}`;
+    if (!viejas.has(k)) viejas.set(k, []);
+    viejas.get(k).push({ tabla: t, addr: normAddress(r.property_address), unit: normUnit(r.unit) });
+  }
+}
+
 const rows = [];
 for (const a of acc.values()) {
+  const k = `${a.utility_type}|${a.account_last4}`;
   const obs = [...a.obs.values()].sort((x, y) => y.count - x.count || (y.last - x.last));
   const total = obs.reduce((s, o) => s + o.count, 0);
   const top = obs[0] || null;
   const share = top ? top.count / total : 0;
-  let confidence;
-  if (!top)                          confidence = 'sin_datos';
-  else if (obs.length === 1)         confidence = a.n >= 2 ? 'solida' : 'unica_observacion';
-  else if (share >= 0.8)             confidence = 'mayoria';
-  else                               confidence = 'CONFLICTO';
-  const provider = [...a.providers.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] || null;
+
+  // Si otra observacion es la MISMA direccion pero mas completa ("175 W 107TH"
+  // vs "175 W 107TH ST"), gana la completa: no son variantes en disputa, es la
+  // misma calle escrita a medias.
+  if (top) {
+    const masCompleta = obs.find(o => o !== top && o.unit === top.unit
+      && o.addr.length > top.addr.length && o.addr.startsWith(top.addr + ' '));
+    if (masCompleta) top.addr = masCompleta.addr;
+  }
+
+  let confidence, address = top?.addr || null, unit = top?.unit || null, locked = false, notes = null;
+  if (RESUELTOS[k]) {
+    ({ address, unit, notes } = RESUELTOS[k]);
+    confidence = 'manual'; locked = true;
+  } else if (!top)              confidence = 'sin_datos';
+  else if (obs.length === 1)    confidence = a.n >= 2 ? 'solida' : 'provisional';
+  else if (share >= 0.8)        confidence = 'mayoria';
+  else                          confidence = 'conflicto';
+
+  // ¿lo confirma alguna tabla vieja?
+  const v = viejas.get(k) || [];
+  const confirma = v.filter(x => x.addr === address && (x.unit || null) === (unit || null));
+  if (confirma.length && confidence === 'provisional') {
+    confidence = 'mayoria';
+    notes = `Una sola factura en el historial, pero ${confirma.map(c => c.tabla).join(' y ')} lo confirman.`;
+  } else if (v.length && !confirma.length && confidence !== 'manual') {
+    notes = `Discrepa de ${v.map(c => `${c.tabla} (${c.addr} #${c.unit || '-'})`).join(' ; ')}`;
+  }
+
   const amts = a.amounts.slice().sort((x, y) => x - y);
   rows.push({
-    provider, utility_type: a.utility_type, account_last4: a.account_last4,
-    address: top?.addr || null, unit: top?.unit || null,
-    confidence, bills: a.n, share: Math.round(share * 100),
-    alternativas: obs.slice(1).map(o => `${o.addr} #${o.unit || '-'} (x${o.count})`).join(' | ') || '',
-    importe_tipico: amts.length ? amts[Math.floor(amts.length / 2)].toFixed(2) : null,
-    ultima: a.last.toISOString().slice(0, 10),
+    utility_type: a.utility_type, account_last4: a.account_last4,
+    provider: [...a.providers.entries()].sort((x, y) => y[1] - x[1])[0]?.[0] || null,
+    address, unit, confidence, locked, notes,
+    bills_seen: a.n, share: Math.round(share * 100),
+    alternatives: obs.filter(o => !(o.addr === address && (o.unit || null) === (unit || null)))
+                     .map(o => `${o.addr} #${o.unit || '-'} (x${o.count})`).join(' | ') || null,
+    typical_amount: amts.length ? amts[Math.floor(amts.length / 2)].toFixed(2) : null,
+    first_seen_at: a.first, last_seen_at: a.last,
   });
 }
 
-rows.sort((a, b) => (a.confidence === 'CONFLICTO' ? -1 : 0) - (b.confidence === 'CONFLICTO' ? -1 : 0)
-  || (a.provider || '').localeCompare(b.provider || '') || b.bills - a.bills);
-
 const by = c => rows.filter(r => r.confidence === c);
-console.log('\n================ REGISTRO DE CUENTAS deducido del historial ================\n');
+console.log('\n============ REGISTRO DE CUENTAS ============\n');
 console.log(`Facturas analizadas : ${bills.length}`);
 console.log(`Cuentas distintas   : ${rows.length}\n`);
-for (const c of ['solida', 'mayoria', 'unica_observacion', 'CONFLICTO']) {
-  console.log(`  ${c.padEnd(20)} ${String(by(c).length).padStart(3)} cuentas   ${String(by(c).reduce((s,r)=>s+r.bills,0)).padStart(3)} facturas`);
+for (const c of ['solida', 'mayoria', 'provisional', 'manual', 'conflicto', 'sin_datos']) {
+  const g = by(c);
+  if (g.length) console.log(`  ${c.padEnd(13)} ${String(g.length).padStart(3)} cuentas  ${String(g.reduce((s, r) => s + r.bills_seen, 0)).padStart(4)} facturas`);
 }
 
-console.log('\n---------------- CONFLICTOS (necesitan a Jake) ----------------');
-console.table(by('CONFLICTO').map(r => ({ prov: r.provider, tipo: r.utility_type, cuenta: r.account_last4,
-  gana: `${r.address} #${r.unit || '-'}`, pct: r.share + '%', contra: r.alternativas, n: r.bills })));
+console.log('\n---- CONFLICTO: lo decide Jake ----');
+console.table(by('conflicto').map(r => ({ prov: r.provider, tipo: r.utility_type, cuenta: r.account_last4,
+  mejor_apuesta: `${r.address} #${r.unit || '-'}`, pct: r.share + '%', contra: r.alternatives, $: r.typical_amount })));
 
-console.log('\n---------------- UNA SOLA OBSERVACION (sin confirmar) ----------------');
-console.table(by('unica_observacion').map(r => ({ prov: r.provider, tipo: r.utility_type, cuenta: r.account_last4,
-  propiedad: `${r.address} #${r.unit || '-'}`, ultima: r.ultima })));
+const discrepan = rows.filter(r => r.notes && r.notes.startsWith('Discrepa'));
+if (discrepan.length) {
+  console.log('\n---- Discrepan de las tablas viejas (gana el historial) ----');
+  console.table(discrepan.map(r => ({ tipo: r.utility_type, cuenta: r.account_last4,
+    historial: `${r.address} #${r.unit || '-'}`, conf: r.confidence, aviso: r.notes.slice(0, 90) })));
+}
 
 fs.writeFileSync('account-registry-propuesto.json', JSON.stringify(rows, null, 2));
 console.log('\nDetalle completo -> account-registry-propuesto.json');
 
-if (!APPLY) { console.log('\n(dry-run: no se ha escrito nada en la base de datos. Usa --apply)'); }
+if (!APPLY) {
+  console.log('\n(dry-run: no se ha escrito nada. Usa --apply)');
+  await pool.end();
+  process.exit(0);
+}
+
+// --- escritura -----------------------------------------------------------
+console.log('\n--- APLICANDO ---');
+await q(`
+  create table if not exists account_registry (
+    id             serial primary key,
+    utility_type   text not null,
+    account_last4  text not null,
+    provider       text,
+    property_address text,
+    unit           text,
+    confidence     text not null,
+    locked         boolean not null default false,
+    bills_seen     integer not null default 0,
+    typical_amount numeric,
+    alternatives   text,
+    notes          text,
+    first_seen_at  timestamptz,
+    last_seen_at   timestamptz,
+    created_at     timestamptz not null default now(),
+    updated_at     timestamptz not null default now(),
+    unique (utility_type, account_last4)
+  )`);
+console.log('tabla account_registry lista');
+
+let ins = 0, upd = 0, skip = 0;
+for (const r of rows) {
+  // locked = confirmado a mano o por Jake: no se pisa jamas por una pasada automatica
+  const res = await q(`
+    insert into account_registry
+      (utility_type, account_last4, provider, property_address, unit, confidence, locked,
+       bills_seen, typical_amount, alternatives, notes, first_seen_at, last_seen_at)
+    values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+    on conflict (utility_type, account_last4) do update set
+      provider       = excluded.provider,
+      property_address = case when account_registry.locked then account_registry.property_address else excluded.property_address end,
+      unit           = case when account_registry.locked then account_registry.unit else excluded.unit end,
+      confidence     = case when account_registry.locked then account_registry.confidence else excluded.confidence end,
+      bills_seen     = excluded.bills_seen,
+      typical_amount = excluded.typical_amount,
+      alternatives   = excluded.alternatives,
+      notes          = case when account_registry.locked then account_registry.notes else excluded.notes end,
+      last_seen_at   = excluded.last_seen_at,
+      updated_at     = now()
+    returning (xmax = 0) as inserted, locked`,
+    [r.utility_type, r.account_last4, r.provider, r.address, r.unit, r.confidence, r.locked,
+     r.bills_seen, r.typical_amount, r.alternatives, r.notes, r.first_seen_at, r.last_seen_at]);
+  if (res[0].inserted) ins++; else upd++;
+}
+console.log(`insertadas ${ins} · actualizadas ${upd} · saltadas ${skip}`);
+
+const fin = await q(`select confidence, count(*)::int n from account_registry group by 1 order by 2 desc`);
+console.table(fin);
 await pool.end();

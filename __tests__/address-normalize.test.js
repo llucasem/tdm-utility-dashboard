@@ -66,7 +66,9 @@ describe('normalizeUnit()', () => {
 
 describe('addressesMatch()', () => {
   it('matches variants of the same address', () => {
-    expect(addressesMatch('175 W 107th', '175 W 107th St')).toBe(false);  // honest: missing suffix → still distinct
+    // El prefijo con límite de palabra se acepta a propósito: los emails traen
+    // la misma calle a medias ("175 W 107th") o entera ("175 W 107th St").
+    expect(addressesMatch('175 W 107th', '175 W 107th St')).toBe(true);
     expect(addressesMatch('175 W 107th St', '175 W 107th Street')).toBe(true);
     expect(addressesMatch('3221 Carter Ave', '3221 Carter Avenue')).toBe(true);
     expect(addressesMatch('439 W 51st St, NY', '439 West 51st Street, NY 10019')).toBe(true);
