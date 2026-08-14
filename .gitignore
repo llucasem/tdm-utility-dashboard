@@ -56,3 +56,6 @@ graphify-out/
 
 # Registro de cuentas propuesto (datos de cliente)
 account-registry-propuesto.json
+
+# Scripts temporales de analisis
+_tmp*.mjs
