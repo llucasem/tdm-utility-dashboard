@@ -1,0 +1,25 @@
+name: Tests
+
+# Se anadio el 14/08/2026. Antes las pruebas solo corrian a mano, y un test de
+# addressesMatch estuvo roto meses sin que nadie se enterara.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - name: Tests
+        run: npm test
+      - name: vercel.json valido para el plan Hobby
+        run: npm run validate:vercel

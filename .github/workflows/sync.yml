@@ -5,17 +5,16 @@ name: Sync utilities every 2 hours
 # /api/sync endpoint the Vercel cron uses, authenticated via CRON_SECRET
 # (middleware.js accepts "Authorization: Bearer ${CRON_SECRET}").
 
-# PAUSADO el 13/08/2026 durante la fase 3 del reset (reescritura del sync).
-# El schedule automatico esta desactivado a proposito: no queremos que el
-# metodo viejo siga escribiendo datos mientras se reescribe el pipeline.
-# Nada se pierde — los emails siguen en Gmail y la ventana rodante de 90 dias
-# los recupera al reactivarlo.
-# PARA REACTIVAR: descomentar el bloque schedule de abajo.
+# Reactivado el 14/08/2026 tras validar el pipeline determinista de la fase 3
+# contra datos de produccion: 73 emails en 2 pasadas, 0 errores, 0 llamadas a
+# la IA. Si el sync devuelve algo distinto de HTTP 200 este workflow falla y
+# GitHub avisa por email — esa es la alarma mientras retry-and-learn siga
+# parado (ver CLAUDE.md, fase 4).
 on:
-  # schedule:
-  #   # Every 2 hours, on the half hour to avoid colliding with Vercel's
-  #   # own 00:00 UTC cron run.
-  #   - cron: '30 */2 * * *'
+  schedule:
+    # Every 2 hours, on the half hour to avoid colliding with Vercel's
+    # own 00:00 UTC cron run.
+    - cron: '30 */2 * * *'
   # Manual trigger from the Actions tab
   workflow_dispatch:
 
