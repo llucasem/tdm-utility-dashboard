@@ -12,9 +12,9 @@ describe('normAddress', () => {
   });
 
   it('NO se come los tokens direccionales', () => {
-    // El normalizador anterior convertia "507 WILSHIRE BLVD" en
-    // "507 WIL HIRE BLVD" al tratar la S como direccional. Datos corrompidos
-    // en la base durante meses.
+    // Ninguna abreviatura ni token direccional puede alterar el nombre de la
+    // calle. Las direcciones son la clave con la que se agrupan las facturas:
+    // una letra de menos y la propiedad deja de cuadrar.
     expect(normAddress('507 Wilshire Blvd')).toBe('507 WILSHIRE BLVD');
     expect(normAddress('939 S Broadway')).toBe('939 S BROADWAY');
     expect(normAddress('439 W 51st St')).toBe('439 W 51ST ST');

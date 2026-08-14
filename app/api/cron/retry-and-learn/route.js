@@ -1,7 +1,6 @@
 import pool from '@/lib/db';
 import { matchBatch } from '@/lib/qb-match';
 import { autoTagBatch } from '@/lib/auto-tag';
-import { runLearningPass, linkBillsFromRecentClasses } from '@/lib/class-learner';
 import { backfillBillsFromQB } from '@/lib/qb-backfill';
 import { refreshLearnedVendors, refreshLearnedBankAccounts } from '@/lib/known-vendors';
 import { createNotification } from '@/lib/notifier';
@@ -22,10 +21,19 @@ export const maxDuration = 60;
  * because Vercel Hobby only allows 2 cron jobs and we have ~5 things to
  * schedule. Each operation is capped so the total stays under 60s.
  *
- *   1. match-pending  : up to 20 bills with status pending/not_found/error
- *   2. auto-tag-pending : up to 20 bills with property + pending tag
- *   3. learn-from-classes : QB Purchases with Class from the last 7 days
- *   4. monthly-report : only on the 1st of the month, fire-and-forget
+ *   1. match-pending   : hasta 20 facturas pendientes -> ¿esta pagada?
+ *   2. auto-tag-pending: etiqueta en QB las que ya tienen propiedad
+ *   3. qb-backfill     : crea facturas de cuentas que NO mandan email
+ *   4. learned-vendors : refresca la lista de proveedores conocidos
+ *   5. monthly-report  : solo el dia 1, fire-and-forget
+ *
+ * RETIRADO el 14/08/2026 (fase 4 del reset): los pasos que deducian la
+ * PROPIEDAD desde las Classes de QuickBooks (runLearningPass y
+ * linkBillsFromRecentClasses). Esa era una capa de reparacion: existia porque
+ * el dato nacia mal. Ahora la propiedad sale de account_registry y no hay nada
+ * que reparar. Las Classes de Jake siguen sirviendo de desempate, pero al
+ * construir el registro (scripts/build-account-registry.mjs), no factura a
+ * factura cada noche.
  *
  * Scheduled at 02:00 UTC — gives QB activity time to settle from the
  * previous day before retrying.
@@ -162,35 +170,7 @@ export async function GET(request) {
     hadError = true;
   }
 
-  // ── 3. Learning pass (small window for speed) ────────────────────────
-  if (msLeft() < 12_000) { skippedForTime.push('learn'); stats.learn = { skippedForTime: true }; }
-  else try {
-    stats.learn = await runLearningPass({ sinceDays: 7 });
-    if (stats.learn.created)   summary.push(`+ ${stats.learn.created} new mappings`);
-    if (stats.learn.conflicts) summary.push(`⚠ ${stats.learn.conflicts} mapping conflicts`);
-  } catch (e) {
-    stats.learn = { error: e.message };
-    hadError = true;
-  }
-
-  // ── 4. Daily mini-sync from QB Classes ───────────────────────────────
-  // Closes the loop: when Jake classes a Purchase that should link to a
-  // bill currently in pending/not_found/matched-wrong, this step links it.
-  // Window bumped 14 → 60 days (2026-06-09): Jake sometimes back-classes
-  // older bills (reconciliation), and 14 days was missing them. 60 days
-  // covers a full monthly reconciliation cycle.
-  if (msLeft() < 15_000) { skippedForTime.push('jakeSync'); stats.jakeSync = { skippedForTime: true }; }
-  else try {
-    stats.jakeSync = await linkBillsFromRecentClasses({ sinceDays });
-    if (stats.jakeSync.linked)         summary.push(`🔗 ${stats.jakeSync.linked} bills linked from Jake`);
-    if (stats.jakeSync.relinked)       summary.push(`↻ ${stats.jakeSync.relinked} relinked`);
-    if (stats.jakeSync.property_filled) summary.push(`+ ${stats.jakeSync.property_filled} properties auto-filled`);
-  } catch (e) {
-    stats.jakeSync = { error: e.message };
-    hadError = true;
-  }
-
-  // ── 4e. Backfill bills from QB for accounts that never email ─────────
+  // ── 3. Backfill de facturas desde QB (cuentas que no mandan email) ───
   // SCE/AT&T/T-Mobile/... send no notification email; their payments only
   // exist in QB (classed by Jake). Create the missing dashboard bills so
   // Jake stops logging into provider portals to check them.
@@ -205,7 +185,7 @@ export async function GET(request) {
     hadError = true;
   }
 
-  // ── 4b. Refresh learned vendors + bank accounts (cheap) ──────────────
+  // ── 4. Refrescar proveedores y cuentas bancarias conocidas ───────────
   // Aggregates payees and bank accounts seen in successfully tagged bills and
   // promotes the ones that appear ≥3 times to the known whitelist.
   if (msLeft() < 8_000) { skippedForTime.push('learnVendors'); stats.learnVendors = { skippedForTime: true }; }

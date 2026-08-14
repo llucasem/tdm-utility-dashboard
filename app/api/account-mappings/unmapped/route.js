@@ -18,10 +18,15 @@ export async function GET() {
        FROM utility_bills
        WHERE account_last4 IS NOT NULL
          AND (property_address IS NULL OR property_address = '(no address)')
+         -- Cuentas que el registro todavia no resuelve. Las provisionales o en
+         -- conflicto SI aparecen aqui: el sync no las usa para asignar, asi
+         -- que siguen necesitando que una persona las confirme.
          AND NOT EXISTS (
-           SELECT 1 FROM account_mappings am
-           WHERE am.utility_type  = utility_bills.utility_type
-             AND am.account_last4 = utility_bills.account_last4
+           SELECT 1 FROM account_registry ar
+           WHERE ar.utility_type  = utility_bills.utility_type
+             AND ar.account_last4 = utility_bills.account_last4
+             AND ar.property_address IS NOT NULL
+             AND ar.confidence IN ('solida', 'mayoria', 'manual')
          )
        GROUP BY utility_type, account_last4
        ORDER BY utility_type, account_last4`

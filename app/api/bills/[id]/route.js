@@ -26,22 +26,34 @@ export async function PATCH(req, { params }) {
 
     const bill = result.rows[0];
 
-    // Recurrent auto-assignment: remember this account_last4 → property mapping so
-    // future bills with the same account get pre-assigned automatically. Also
-    // back-fill any other unassigned bills for the same account in one go.
+    // Cuando una persona asigna una propiedad, esa decision manda y no se
+    // vuelve a preguntar: se escribe en account_registry como 'manual' y
+    // locked, de modo que ni el sync ni la reconstruccion del registro la
+    // pisen jamas. Es lo que hace cierto el "corrigelo una vez y queda".
+    //
+    // OJO: hasta el 14/08/2026 esto escribia en account_mappings, la tabla
+    // que el sync nuevo ya no lee. La correccion de Jake se perdia en la
+    // siguiente factura.
     let bulkUpdated = 0;
     let bulkUpdatedIds = [];
     if (bill.account_last4 && bill.utility_type) {
       const provider = (bill.email_from || '').match(/<([^>]+)>/)?.[1] || bill.email_from || null;
       try {
         await pool.query(`
-          INSERT INTO account_mappings (utility_type, provider, account_last4, property_address, unit)
-          VALUES ($1, $2, $3, $4, $5)
+          INSERT INTO account_registry
+            (utility_type, account_last4, provider, property_address, unit,
+             confidence, locked, bills_seen, notes, first_seen_at, last_seen_at)
+          VALUES ($1, $2, $3, $4, $5, 'manual', true, 1, $6, now(), now())
           ON CONFLICT (utility_type, account_last4) DO UPDATE SET
             provider         = EXCLUDED.provider,
             property_address = EXCLUDED.property_address,
-            unit             = EXCLUDED.unit
-        `, [bill.utility_type, provider, bill.account_last4, bill.property_address, bill.unit]);
+            unit             = EXCLUDED.unit,
+            confidence       = 'manual',
+            locked           = true,
+            notes            = EXCLUDED.notes,
+            updated_at       = now()
+        `, [bill.utility_type, bill.account_last4, provider, bill.property_address, bill.unit,
+            `Asignada a mano desde el dashboard el ${new Date().toISOString().slice(0, 10)}.`]);
 
         const bulk = await pool.query(`
           UPDATE utility_bills
