@@ -1,447 +1,272 @@
-import { getUtilityEmails } from '@/lib/gmail';
-import { parseEmail }       from '@/lib/parser';
-import pool                 from '@/lib/db';
-import { autoTagBatch }     from '@/lib/auto-tag';
-import { matchBatch }       from '@/lib/qb-match';
-import { detectAnomaliesBatch } from '@/lib/anomaly-detector';
+/**
+ * Sync de facturas — reescrito en la fase 3 del reset (14/08/2026).
+ *
+ * Como funciona ahora, y en que se diferencia del anterior:
+ *
+ *   1. El remitente decide. Los 5 proveedores que mandan facturas de verdad
+ *      usan plantillas rigidas (lib/providers.js): se leen con expresiones
+ *      regulares, sin IA, sin coste y sin margen de error.
+ *   2. La IA solo interviene con remitentes que NO reconocemos, y limitada a
+ *      leer importe / vencimiento / cuenta. Nunca decide de quien es la factura.
+ *   3. La propiedad sale del registro de cuentas (account_registry). Antes se
+ *      le preguntaba a la IA en cada email, y contestaba distinto cada mes.
+ *   4. El ruido va a processed_emails, no a utility_bills. La tabla de
+ *      facturas pasa a tener solo facturas (antes el 72% era basura).
+ */
+import { getUtilityEmails }   from '@/lib/gmail';
+import { parseEmail }         from '@/lib/parser';
+import pool                   from '@/lib/db';
+import { extractBill }        from '@/lib/providers';
+import { loadRegistry, resolveAccount, normAddress, normUnit } from '@/lib/account-registry';
+import { matchBatch }         from '@/lib/qb-match';
 import { createNotification } from '@/lib/notifier';
 import { startHeartbeat, endHeartbeat } from '@/lib/heartbeat';
-import { syncAirtable }     from '@/lib/airtable-sync';
+import { syncAirtable }       from '@/lib/airtable-sync';
 
-// Vercel function timeout — bumped from the default 10s. On Hobby plan the
-// max is 60s; on Pro this can go up to 300s. The pre-filter in lib/gmail.js
-// caps each invocation at 30 new emails so we comfortably fit in 60s even
-// when there's a backlog.
 export const maxDuration = 60;
+
+// Sin llamadas a Claude el trabajo por email es de milisegundos, asi que el
+// limite ya no es el numero de emails sino el reloj de Vercel (60s duros).
+const DEADLINE_MS     = 42_000;   // deja ~18s para el match de QB y Airtable
+const MAX_IA_POR_RUN  = 8;        // solo para remitentes desconocidos
+const VENTANA_DUP_DIAS = 18;      // recordatorios del mismo recibo
 
 export async function GET() {
   const hb = startHeartbeat('sync');
+  const t0 = Date.now();
+  const transcurrido = () => Date.now() - t0;
+
   try {
-    const emails = await getUtilityEmails();
+    const [emails, registry] = await Promise.all([
+      getUtilityEmails(),
+      loadRegistry(pool),
+    ]);
 
-    if (emails.length === 0) {
-      // No Gmail work — but ALWAYS give Airtable its turn. The old early
-      // return here meant rent emails only processed when there also
-      // happened to be new utility emails.
-      let airtableStats = null;
-      try {
-        airtableStats = await syncAirtable({ limit: 15 });
-      } catch (e) {
-        airtableStats = { ok: false, error: e.message };
-      }
-      await endHeartbeat(hb, { ok: true });
-      return Response.json({ ok: true, saved: 0, airtable: airtableStats, message: 'No new emails in the Utilities folder.' });
-    }
-
-    const results = [];
-
-    // Subjects that are NOT real bills — skip before Claude burns tokens parsing them.
-    // Categories: payment confirmations, marketing/upsell, surveys, generic announcements.
-    // We err on the side of caution — only patterns we're confident are not bills.
-    const SKIP_SUBJECTS = [
-      // Payment confirmations / scheduling
-      'automatic monthly payment is scheduled',
-      'your payment is scheduled',
-      'thanks for paying',
-      'thank you for your payment',
-      'we\'ve received your payment',
-      'one-time payment confirmation',
-      'order confirmation',
-      'automatic payment declined',
-      'issue with your automatic monthly payment',
-      'autopay was successful',
-      'autopay payment',
-      'your request to sign up for auto pay',
-      // Surveys & feedback
-      'your opinion matters',
-      'values your feedback',
-      'annual survey',
-      'your outage experience',
-      // Marketing / upsell
-      'get internet speed',
-      'get a connection that keeps up',
-      'enhance your connection',
-      'entertainment that moves',
-      'free spectrum mobile line',
-      // Account / service operations (no billing info)
-      'your verification code',
-      'service alert',
-      'power outage',
-      'service is restored',
-      'please return your spectrum equipment',
-      'work notice',
-      'canceled service appointment',
-      'scheduled your service appointment',
-      'welcome to spectrum notifications',
-      'changes have been made to your account',
-      'you have a credit on your bill',
-      // Generic announcements that don't carry billing info
-      'california climate credit timing update',
-      'notice of cpuc',
-    ];
-
-    // Sender patterns that are marketing-only (never carry real bills).
-    // NOTE: LADWP must NEVER be skipped — their "Payment Received" emails are
-    // the only billing signal LADWP sends (no "bill ready" emails exist).
-    const SKIP_SENDERS = [
-      'spectrum customer experience team',
-      'spectrum@exchange.spectrum',  // marketing list
-      'sce-feedback@feedback.sce.com', // SCE surveys
-    ];
-
-    // Two independent guards keep the function under Vercel's 60s hard kill
-    // (HTTP 504 / FUNCTION_INVOCATION_TIMEOUT):
-    //   1. MAX_PARSES_PER_RUN — cap on Claude calls (noise is free, parses
-    //      cost 2-4s each with Sonnet).
-    //   2. PARSE_DEADLINE_MS — wall-clock budget. A heavy run (big PDFs, slow
-    //      Claude) can blow 60s well before hitting the parse cap, so we stop
-    //      starting new parses at 42s and leave ~18s for the QB match +
-    //      auto-tag + Airtable tail. Whatever's left is deferred to the next
-    //      run (every 2h via GitHub Actions) — nothing is lost.
-    const MAX_PARSES_PER_RUN = 10;
-    const PARSE_DEADLINE_MS  = 42_000;
-    let parseCount = 0;
-    const elapsed = () => Date.now() - hb.startTime;
-
-    // Persist a noise email as a 0-amount row so it is never re-fetched.
-    // CRITICAL: without this insert, skipped emails come back from Gmail on
-    // every run and permanently hog the per-run slots (the bug that starved
-    // out real bills during May 2026).
-    async function persistNoise(email, reason) {
-      await pool.query(
-        `INSERT INTO utility_bills
-           (gmail_message_id, utility_type, amount_due, email_received_at, email_subject, email_from, status)
-         VALUES ($1, 'other', 0, $2, $3, $4, 'pending')
-         ON CONFLICT (gmail_message_id) DO NOTHING`,
-        [email.id, email.date, email.subject, email.from || null]
-      );
-      results.push({ id: email.id, status: 'skipped', reason });
-    }
+    const stats = { facturas: 0, saldo_favor: 0, pagos: 0, ruido: 0, errores: 0, aplazados: 0, ia: 0 };
+    const nuevasIds = [];
+    const revisar   = [];
+    let usosIA = 0;
 
     for (const email of emails) {
-      // Skip known payment-confirmation / marketing / survey emails before
-      // burning Claude tokens. See SKIP_SUBJECTS + SKIP_SENDERS above.
-      const subjectLower = (email.subject || '').toLowerCase();
-      const fromLower    = (email.from    || '').toLowerCase();
-      if (SKIP_SUBJECTS.some(s => subjectLower.includes(s))) {
-        await persistNoise(email, `noise filter: subject contains "${SKIP_SUBJECTS.find(s => subjectLower.includes(s))}"`);
-        continue;
-      }
-      if (SKIP_SENDERS.some(s => fromLower.includes(s))) {
-        await persistNoise(email, 'noise filter: sender is marketing list');
-        continue;
-      }
+      if (transcurrido() > DEADLINE_MS) { stats.aplazados++; continue; }
 
-      // ConEd CONSOLIDATED statements (new template, July 2026): ONE email
-      // containing MANY bills ("Amount Due / Due Date" repeated N times, all
-      // under a masked master account). Claude's one-bill-per-email parser
-      // chokes on these, so extract them deterministically with a regex and
-      // insert one row per bill. The template repeats the same mailing
-      // address for every line, so rows go in UNASSIGNED — the QB matcher
-      // adopts the property once Jake's classed payment appears.
-      if (subjectLower.includes('con edison bill is ready')) {
-        const bodyText = (email.body || email.snippet || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-        const found = [...bodyText.matchAll(/-?\$([\d,]+\.\d{2})\s+(\d{2})\/(\d{2})\/(\d{4})/g)]
-          .map(m => ({ amount: parseFloat(m[1].replace(/,/g, '')), due: `${m[4]}-${m[2]}-${m[3]}` }));
-        let unique = [...new Map(found.map(f => [`${f.amount}|${f.due}`, f])).values()]
-          .filter(f => f.amount > 0);
-        // Balance LADDER detection: a delinquent account's statement lists its
-        // balance month by month — same due date, amounts climbing by a
-        // near-constant step (e.g. 472 9th 4FL: $226→$648 in ~$38 steps).
-        // Those are snapshots of ONE debt, not N separate bills: keep only
-        // the latest (highest) balance.
-        if (unique.length >= 3 && new Set(unique.map(f => f.due)).size === 1) {
-          const sorted = unique.map(f => f.amount).sort((a, b) => a - b);
-          const steps = sorted.slice(1).map((v, i) => v - sorted[i]);
-          const medStep = steps.slice().sort((a, b) => a - b)[Math.floor(steps.length / 2)];
-          const ladder = medStep > 0 && steps.every(s => Math.abs(s - medStep) <= Math.max(15, medStep * 0.4));
-          if (ladder) {
-            unique = [unique.reduce((a, b) => (b.amount > a.amount ? b : a))];
-          }
-        }
-        if (unique.length >= 2 || (unique.length === 1 && found.length >= 2)) {
-          let inserted = 0;
-          for (let k = 0; k < unique.length; k++) {
-            const f = unique[k];
-            // Reminder guard: same amount+type already ingested <18 days back
-            const dup = await pool.query(`
-              SELECT 1 FROM utility_bills
-              WHERE utility_type = 'electricity'
-                AND ROUND(amount_due::numeric, 2) = ROUND($1::numeric, 2)
-                AND NOT is_duplicate
-                AND email_received_at BETWEEN $2::timestamptz - INTERVAL '18 days' AND $2::timestamptz
-              LIMIT 1
-            `, [f.amount.toFixed(2), email.date]);
-            if (dup.rowCount > 0) continue;
-            await pool.query(
-              `INSERT INTO utility_bills
-                 (gmail_message_id, utility_type, amount_due, due_date, email_received_at,
-                  email_subject, email_from, status)
-               VALUES ($1, 'electricity', $2, $3, $4, $5, $6, 'pending')
-               ON CONFLICT (gmail_message_id) DO NOTHING`,
-              [k === 0 ? email.id : `${email.id}#${k}`, f.amount.toFixed(2), f.due,
-               email.date, email.subject, email.from || null]
-            );
-            inserted++;
-          }
-          // If every line was a reminder-duplicate, still mark the email as
-          // processed so Gmail doesn't re-serve it forever.
-          if (inserted === 0) {
-            await persistNoise(email, 'ConEd consolidated: all lines already ingested');
-          }
-          results.push({ id: email.id, status: 'saved', reason: `ConEd consolidated: ${inserted}/${unique.length} bills` });
+      let lectura = extractBill(email);
+
+      // Remitente desconocido -> IA de reserva, con presupuesto.
+      if (!lectura) {
+        if (usosIA >= MAX_IA_POR_RUN) { stats.aplazados++; continue; }
+        usosIA++; stats.ia++;
+        try {
+          const p = await parseEmail(email);
+          lectura = p && p.amount_due > 0
+            ? { kind: 'bill', provider: null, utility_type: p.utility_type || 'other',
+                account_last4: p.account_last4 || null, amount_due: parseFloat(p.amount_due),
+                due_date: p.due_date || null, template: 'ia/reserva' }
+            : { kind: 'noise', template: 'ia/sin-importe' };
+        } catch (e) {
+          stats.errores++;
+          await registrar(email, { decision: 'error', note: e.message?.slice(0, 200) });
           continue;
         }
       }
 
-      // Budget exhausted (count OR wall-clock) — leave this (non-noise) email
-      // for the next run. No row is inserted, so Gmail returns it again.
-      if (parseCount >= MAX_PARSES_PER_RUN || elapsed() > PARSE_DEADLINE_MS) {
-        results.push({
-          id: email.id,
-          status: 'deferred',
-          reason: parseCount >= MAX_PARSES_PER_RUN ? 'parse count budget exhausted' : 'parse time budget exhausted',
-        });
-        continue;
-      }
-      parseCount++;
+      const items = lectura.kind === 'multi' ? lectura.items : [lectura];
 
-      // 1. Parse with Claude (PDF if attached, otherwise email body)
-      let parsed;
-      try {
-        parsed = await parseEmail(email);
-      } catch (parseErr) {
-        const reason = parseErr.message?.includes('429') ? 'rate limit — retry later' : parseErr.message;
-        results.push({ id: email.id, status: 'error', reason });
-        await new Promise(r => setTimeout(r, 2000)); // wait extra if rate-limited
-        continue;
-      }
+      for (const item of items) {
+        if (item.kind === 'noise') {
+          stats.ruido++;
+          await registrar(email, { decision: 'noise', ...item });
+          continue;
+        }
 
-      if (!parsed) {
-        // Persist a synthetic row so this email doesn't infinite-retry on
-        // every sync. parse_error_count caps retries to avoid filling the DB
-        // with junk if Claude can't parse a malformed email.
-        await pool.query(
+        if (item.kind === 'payment') {
+          const marcadas = await marcarPagada(item, email);
+          stats.pagos++;
+          await registrar(email, { decision: 'payment', ...item,
+            note: marcadas ? `marcada pagada la factura ${marcadas}` : 'sin factura que casar' });
+          continue;
+        }
+
+        if (item.kind === 'credit') {
+          stats.saldo_favor++;
+          await registrar(email, { decision: 'credit', ...item,
+            note: `saldo a favor $${item.credit_balance ?? item.amount_due}` });
+          continue;
+        }
+
+        // ── factura ──────────────────────────────────────────────────────
+        const prop = resolverPropiedad(registry, item, revisar);
+
+        const duplicada = await esDuplicada(item, email);
+        const res = await pool.query(
           `INSERT INTO utility_bills
-             (gmail_message_id, utility_type, amount_due, email_received_at, email_subject, email_from, status, parse_error_count)
-           VALUES ($1, 'other', NULL, $2, $3, $4, 'pending', 1)
-           ON CONFLICT (gmail_message_id) DO UPDATE SET parse_error_count = utility_bills.parse_error_count + 1`,
-          [email.id, email.date, email.subject, email.from || null]
+             (gmail_message_id, utility_type, property_address, unit, account_last4,
+              amount_due, due_date, email_received_at, email_subject, email_from,
+              status, is_duplicate, source)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'email')
+           ON CONFLICT (gmail_message_id) DO NOTHING
+           RETURNING id`,
+          [idFactura(email, item, items), item.utility_type, prop.address, prop.unit,
+           item.account_last4, item.amount_due, item.due_date, email.date,
+           email.subject, email.from || null, 'pending', duplicada]
         );
-        results.push({ id: email.id, status: 'error', reason: 'Claude no pudo extraer datos' });
-        continue;
-      }
 
-      // Sentinel from sanitize(): this email is a payment confirmation — not a bill.
-      // Insert a 0-amount row so we mark it as processed and never re-attempt it.
-      if (parsed.__skip) {
-        await pool.query(
-          `INSERT INTO utility_bills
-             (gmail_message_id, utility_type, amount_due, email_received_at, email_subject, email_from, status, account_last4)
-           VALUES ($1, 'other', 0, $2, $3, $4, 'pending', $5)
-           ON CONFLICT (gmail_message_id) DO NOTHING`,
-          [email.id, email.date, email.subject, email.from || null, parsed.account_last4 || null]
-        );
-        results.push({ id: email.id, status: 'skipped', reason: parsed.reason || 'payment confirmation' });
-        continue;
-      }
-
-      // Skip emails with no payable amount — notifications, confirmations, etc.
-      if (!parsed.amount_due || parseFloat(parsed.amount_due) <= 0) {
-        // Same insert-as-skipped pattern to avoid infinite retries.
-        await pool.query(
-          `INSERT INTO utility_bills
-             (gmail_message_id, utility_type, amount_due, email_received_at, email_subject, email_from, status, account_last4)
-           VALUES ($1, $2, 0, $3, $4, $5, 'pending', $6)
-           ON CONFLICT (gmail_message_id) DO NOTHING`,
-          [email.id, parsed.utility_type || 'other', email.date, email.subject, email.from || null, parsed.account_last4 || null]
-        );
-        results.push({ id: email.id, status: 'skipped', reason: 'amount_due is 0 or missing' });
-        continue;
-      }
-
-      // 2. Apply mapping if it exists and the email didn't yield an address
-      let finalAddress = parsed.property_address || null;
-      let finalUnit    = parsed.unit             || null;
-      if (!finalAddress && parsed.account_last4 && parsed.utility_type) {
-        const mapRes = await pool.query(
-          `SELECT property_address, unit FROM account_mappings
-           WHERE utility_type = $1 AND account_last4 = $2 LIMIT 1`,
-          [parsed.utility_type, parsed.account_last4]
-        );
-        if (mapRes.rows.length > 0) {
-          finalAddress = mapRes.rows[0].property_address;
-          finalUnit    = finalUnit || mapRes.rows[0].unit;
+        if (res.rowCount) {
+          stats.facturas++;
+          nuevasIds.push(res.rows[0].id);
+          await registrar(email, { decision: 'bill', ...item, bill_id: res.rows[0].id,
+            note: `propiedad desde ${prop.origen}${duplicada ? ' · duplicada' : ''}` });
+          // Cuenta nueva: se aprende sola desde la direccion que trae el email.
+          if (prop.origen === 'email' && item.account_last4) {
+            await aprenderCuenta(item, prop, registry);
+          }
         }
       }
-
-      // 2.5 — DEDUP rule: providers send several emails for the SAME bill —
-      // ConEd "Bill Is Ready" + "Bill Is Due" reminder 12-14 days later,
-      // LADWP "Bill Available" + "Payment Received" ~11 days later, Spectrum
-      // "Statement Ready" + "Payment Scheduled" ~8 days later. If we already
-      // saved a bill with the same (utility_type, account_last4, amount_due)
-      // within ±18 days, mark this one as duplicate. 18 days catches every
-      // known reminder pattern while staying clear of real monthly cycles
-      // (28-31 days apart even for fixed-amount Spectrum plans).
-      let isDuplicate = false;
-      if (parsed.account_last4 && parsed.amount_due && parsed.utility_type) {
-        const dup = await pool.query(
-          `SELECT id FROM utility_bills
-            WHERE utility_type = $1 AND account_last4 = $2
-              AND ROUND(amount_due::numeric, 2) = ROUND($3::numeric, 2)
-              AND email_received_at BETWEEN $4::timestamptz - INTERVAL '18 days'
-                                       AND $4::timestamptz + INTERVAL '18 days'
-              AND NOT is_duplicate
-            LIMIT 1`,
-          [parsed.utility_type, parsed.account_last4, parsed.amount_due, email.date]
-        );
-        if (dup.rowCount > 0) isDuplicate = true;
-      }
-
-      // 3. Save to Neon — ON CONFLICT skips duplicates atomically.
-      // __paid: LADWP payment confirmations are the only bill record LADWP
-      // sends — the autopay already went through, so they arrive as 'paid'.
-      const res = await pool.query(
-        `INSERT INTO utility_bills
-           (gmail_message_id, utility_type, property_address, unit, account_last4,
-            amount_due, due_date, email_received_at, email_subject, email_from, status, is_duplicate)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-         ON CONFLICT (gmail_message_id) DO NOTHING
-         RETURNING id, property_address`,
-        [
-          email.id,
-          parsed.utility_type  || 'other',
-          finalAddress,
-          finalUnit,
-          parsed.account_last4 || null,
-          parsed.amount_due    || null,
-          parsed.due_date      || null,
-          email.date,
-          email.subject,
-          email.from           || null,
-          parsed.__paid ? 'paid' : 'pending',
-          isDuplicate,
-        ]
-      );
-
-      if (res.rowCount === 0) {
-        results.push({ id: email.id, status: 'skipped', reason: 'already processed' });
-      } else if (isDuplicate) {
-        results.push({ id: email.id, status: 'skipped', reason: 'duplicate of existing bill (same account+amount within ±10d)', billId: res.rows[0].id });
-      } else {
-        results.push({ id: email.id, status: 'saved', data: parsed, billId: res.rows[0].id, hasProperty: !!res.rows[0].property_address });
-      }
-
-      // Pause between Claude calls to stay under the rate limit
-      // (Anthropic Haiku: 30k tokens/min — 500ms gives ~120 calls/min headroom)
-      await new Promise(r => setTimeout(r, 500));
     }
 
-    const saved    = results.filter(r => r.status === 'saved').length;
-    const skipped  = results.filter(r => r.status === 'skipped').length;
-    const errors   = results.filter(r => r.status === 'error').length;
-    const deferred = results.filter(r => r.status === 'deferred').length;
-
-    // QuickBooks match for ALL new bills (independent of property). The result
-    // is persisted in utility_bills.qb_match_* so the dashboard shows badges
-    // automatically and auto-tag can reuse the lookup.
-    const newBillIds = results
-      .filter(r => r.status === 'saved')
-      .map(r => r.billId);
-
-    let matchStats = null;
-    if (newBillIds.length > 0) {
-      try {
-        matchStats = await matchBatch(newBillIds);
-      } catch (e) {
-        matchStats = { error: e.message };
-      }
+    // ── QuickBooks: ya solo responde "¿esta pagada?" ────────────────────
+    let match = null;
+    if (nuevasIds.length && transcurrido() < 50_000) {
+      try { match = await matchBatch(nuevasIds); }
+      catch (e) { match = { error: e.message }; }
     }
 
-    // Auto-tag the ones that already have a property assigned. They will reuse
-    // the persisted match (no extra QB calls).
-    const billIdsToTag = results
-      .filter(r => r.status === 'saved' && r.hasProperty)
-      .map(r => r.billId);
-
-    let autoTagStats = null;
-    if (billIdsToTag.length > 0) {
-      try {
-        autoTagStats = await autoTagBatch(billIdsToTag);
-      } catch (e) {
-        autoTagStats = { error: e.message };
-        await createNotification({
-          type:    'error',
-          title:   'Auto-tag failed during sync',
-          message: `Could not run auto-tag: ${e.message}. New bills were saved but not tagged in QuickBooks.`,
-        });
-      }
+    // ── Airtable (rent) con el tiempo que quede ─────────────────────────
+    let airtable = null;
+    const queda = 55_000 - transcurrido();
+    if (queda < 8_000) {
+      airtable = { ok: true, skipped: 'aplazado — el presupuesto de tiempo se fue en Gmail' };
+    } else {
+      try { airtable = await syncAirtable({ limit: Math.max(1, Math.min(15, Math.floor(queda / 3_000))) }); }
+      catch (e) { airtable = { ok: false, error: e.message }; }
     }
 
-    // Anomaly detection on every new bill — does its own notifications when it finds something
-    let anomalyStats = null;
-    if (newBillIds.length > 0) {
-      try {
-        anomalyStats = await detectAnomaliesBatch(newBillIds);
-      } catch (e) {
-        anomalyStats = { error: e.message };
-      }
-    }
-
-    // One summary notification per sync run
-    if (saved > 0 || errors > 0) {
-      const parts = [`${saved} new bills`];
-      if (errors > 0) parts.push(`${errors} parse errors`);
-      if (matchStats?.matched)     parts.push(`${matchStats.matched} matched`);
-      if (matchStats?.ambiguous)   parts.push(`${matchStats.ambiguous} ambiguous`);
-      if (matchStats?.not_found)   parts.push(`${matchStats.not_found} not found`);
-      if (autoTagStats?.tagged)    parts.push(`${autoTagStats.tagged} tagged in QB`);
-      if (autoTagStats?.error)     parts.push(`${autoTagStats.error} tag errors`);
-
+    if (revisar.length) {
       await createNotification({
-        type:    errors > 0 || autoTagStats?.error > 0 ? 'warning' : (saved > 0 ? 'success' : 'info'),
-        title:   `Sync complete · ${saved} new bills`,
-        message: parts.join(' · '),
-        metadata: { saved, errors, match: matchStats, autoTag: autoTagStats },
+        type: 'warning',
+        title: `${revisar.length} facturas sin propiedad`,
+        message: 'Cuentas que no estan en el registro. Al asignarlas una vez, quedan fijadas.'
+               + ' · ' + revisar.slice(0, 5).map(r => `${r.utility_type} ····${r.account_last4}`).join(', '),
+        metadata: { revisar },
       });
     }
 
-    // ── Airtable sync (rent payments + Conservice utilities) ───────────
-    // Runs after Gmail in the same function. Its record limit is scaled to
-    // the time LEFT in the 60s budget (each record can cost a Claude call):
-    // if the Gmail half was heavy, Airtable does fewer (or zero) records this
-    // run and the rest waits for the next one. This is what stopped the
-    // occasional HTTP 504 — the two halves no longer blindly add up past 60s.
-    let airtableStats = null;
-    const remainingMs = 55_000 - elapsed();
-    if (remainingMs < 8_000) {
-      airtableStats = { ok: true, skipped: 'deferred — sync time budget spent on Gmail this run' };
-    } else {
-      const limit = Math.max(1, Math.min(15, Math.floor(remainingMs / 3_000)));
-      try {
-        airtableStats = await syncAirtable({ limit });
-      } catch (e) {
-        airtableStats = { ok: false, error: e.message };
-        await createNotification({
-          type:    'error',
-          title:   'Airtable sync failed',
-          message: `Could not run Airtable rent sync: ${e.message}`,
-        });
-      }
+    if (stats.facturas || stats.errores) {
+      await createNotification({
+        type: stats.errores ? 'warning' : 'success',
+        title: `Sync · ${stats.facturas} facturas nuevas`,
+        message: [`${stats.facturas} facturas`, `${stats.pagos} pagos`, `${stats.saldo_favor} saldo a favor`,
+                  `${stats.ruido} ruido`, `${stats.ia} con IA`,
+                  match?.matched ? `${match.matched} casadas en QB` : null,
+                 ].filter(Boolean).join(' · '),
+        metadata: { stats, match },
+      });
     }
 
-    await endHeartbeat(hb, { ok: errors === 0 && !autoTagStats?.error });
-    return Response.json({
-      ok: true,
-      saved, skipped, errors, deferred, results,
-      match: matchStats,
-      autoTag: autoTagStats,
-      airtable: airtableStats,
-    });
+    await endHeartbeat(hb, { ok: stats.errores === 0 });
+    return Response.json({ ok: true, emails: emails.length, ...stats, match, airtable, revisar });
 
   } catch (error) {
-    console.error('[sync] Error:', error.message);
+    console.error('[sync]', error);
     await endHeartbeat(hb, { ok: false, error: error.message });
     return Response.json({ ok: false, error: error.message }, { status: 500 });
   }
+}
+
+// ── auxiliares ───────────────────────────────────────────────────────────────
+
+/** Un email consolidado genera varias facturas: cada una necesita su propio id. */
+function idFactura(email, item, items) {
+  if (items.length === 1) return email.id;
+  return `${email.id}#${item.account_last4}-${item.amount_due}`;
+}
+
+/**
+ * La propiedad SIEMPRE del registro. Solo si la cuenta no esta registrada se
+ * usa la direccion que venga en el propio email (Spectrum y el consolidado de
+ * ConEd la traen). Si no hay ni una ni otra, la factura queda sin asignar y
+ * Jake la resuelve UNA vez.
+ */
+function resolverPropiedad(registry, item, revisar) {
+  const reg = resolveAccount(registry, item.utility_type, item.account_last4);
+  if (reg) return { address: reg.property_address, unit: reg.unit, origen: 'registro' };
+
+  if (item.service_address) {
+    return { address: normAddress(item.service_address), unit: normUnit(item.unit), origen: 'email' };
+  }
+
+  revisar.push({ utility_type: item.utility_type, account_last4: item.account_last4, amount: item.amount_due });
+  return { address: null, unit: null, origen: 'sin asignar' };
+}
+
+/** Una cuenta nueva se registra sola con la direccion que trae el proveedor. */
+async function aprenderCuenta(item, prop, registry) {
+  if (!prop.address) return;
+  await pool.query(
+    `INSERT INTO account_registry
+       (utility_type, account_last4, provider, property_address, unit, confidence, bills_seen, notes, first_seen_at, last_seen_at)
+     VALUES ($1,$2,$3,$4,$5,'provisional',1,$6, now(), now())
+     ON CONFLICT (utility_type, account_last4) DO NOTHING`,
+    [item.utility_type, item.account_last4, item.provider || null, prop.address, prop.unit,
+     'Aprendida del propio email del proveedor durante el sync.']
+  );
+  registry.set(`${item.utility_type}|${item.account_last4}`,
+    { property_address: prop.address, unit: prop.unit, confidence: 'provisional' });
+}
+
+/**
+ * Los proveedores mandan varios avisos del mismo recibo (ConEd "Bill Is Ready"
+ * y "Bill Is Due" 12-14 dias despues, Spectrum statement y domiciliacion 8
+ * dias despues). Misma cuenta + mismo importe dentro de 18 dias = el mismo
+ * recibo. Los ciclos mensuales de verdad van a 28-31 dias, asi que no hay
+ * riesgo de tapar una factura real.
+ */
+async function esDuplicada(item, email) {
+  if (!item.account_last4 || !item.amount_due) return false;
+  const r = await pool.query(
+    `SELECT 1 FROM utility_bills
+      WHERE utility_type = $1 AND account_last4 = $2
+        AND ROUND(amount_due::numeric,2) = ROUND($3::numeric,2)
+        AND NOT coalesce(is_duplicate,false)
+        AND email_received_at BETWEEN $4::timestamptz - make_interval(days => $5)
+                                  AND $4::timestamptz + make_interval(days => $5)
+      LIMIT 1`,
+    [item.utility_type, item.account_last4, item.amount_due, email.date, VENTANA_DUP_DIAS]
+  );
+  return r.rowCount > 0;
+}
+
+/** Una confirmacion de pago marca pagada la factura que le corresponde. */
+async function marcarPagada(item, email) {
+  if (!item.account_last4 || !item.amount_due) return null;
+  const r = await pool.query(
+    `UPDATE utility_bills SET status = 'paid'
+      WHERE id = (
+        SELECT id FROM utility_bills
+         WHERE utility_type = $1 AND account_last4 = $2
+           AND ROUND(amount_due::numeric,2) = ROUND($3::numeric,2)
+           AND status <> 'paid' AND NOT coalesce(is_duplicate,false)
+           AND email_received_at BETWEEN $4::timestamptz - interval '45 days' AND $4::timestamptz + interval '5 days'
+         ORDER BY email_received_at DESC LIMIT 1)
+      RETURNING id`,
+    [item.utility_type, item.account_last4, item.amount_due, email.date]
+  );
+  return r.rows[0]?.id || null;
+}
+
+/** Deja constancia de que este email ya se miro, decida lo que decida. */
+async function registrar(email, info) {
+  await pool.query(
+    `INSERT INTO processed_emails
+       (gmail_message_id, provider, decision, template, account_last4, amount,
+        email_subject, email_from, email_received_at, bill_id, note)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     ON CONFLICT (gmail_message_id) DO UPDATE SET
+       decision = excluded.decision, template = excluded.template,
+       bill_id = coalesce(excluded.bill_id, processed_emails.bill_id),
+       note = excluded.note, processed_at = now()`,
+    [email.id, info.provider || null, info.decision, info.template || null,
+     info.account_last4 || null, info.amount_due ?? null,
+     email.subject, email.from || null, email.date, info.bill_id || null, info.note || null]
+  );
 }
