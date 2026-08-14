@@ -47,6 +47,30 @@ const RESUELTOS = {
     address: '501 E 106TH ST', unit: '4',
     notes: 'Resuelto 13/08/2026: la unidad #4 aparece en abr/may y se pierde al parsear desde junio. OJO: cuenta morosa, el saldo crece cada mes.',
   },
+
+  // Los 4 conflictos de SoCalGas. NO hizo falta preguntar a Jake: el apodo y la
+  // unidad venian escritos en el propio email, siempre en el mismo sitio:
+  //     Account Number *****19501 (SORRENTO 510)
+  // El parser los ignoraba y se inventaba una direccion distinta cada mes.
+  // Confirmado por tres fuentes que coinciden: el apodo del email, la unica
+  // direccion fiable del registro con esa unidad, y la Class de Jake en QB.
+  'gas|9501': {
+    address: '620 SANTA MONICA BLVD', unit: '510',
+    notes: 'Resuelto 14/08/2026 desde el email: "(SORRENTO 510)". Class de Jake: SORRENTO #510.',
+  },
+  'gas|4904': {
+    address: '1528 6TH ST', unit: '209',
+    notes: 'Resuelto 14/08/2026 desde el email: "(VERONA 209)". Class de Jake: SM Verona #209.',
+  },
+  'gas|3904': {
+    address: '1420 5TH ST', unit: '501',
+    notes: 'Resuelto 14/08/2026 desde el email: "(RIVA 501)". Class de Jake: Riva 501.',
+  },
+  'gas|4706': {
+    address: '13488 MAXELLA AVE', unit: '469',
+    notes: 'Resuelto 14/08/2026 desde el email: "(STELLA 469)". Class de Jake: STELLA #469. '
+         + 'URGENTE: aviso final de corte de gas por $3.174,09 vencidos el 20/07/2026.',
+  },
 };
 
 // --- main ----------------------------------------------------------------
