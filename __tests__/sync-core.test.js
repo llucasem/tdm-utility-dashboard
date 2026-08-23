@@ -47,8 +47,8 @@ const factura = (over = {}) => ({
 let registry;
 beforeEach(() => {
   registry = new Map([
-    ['internet|8625', { property_address: '4750 LINCOLN BLVD', unit: '382', confidence: 'solida' }],
-    ['gas|4904',      { property_address: '1528 6TH ST',       unit: '209', confidence: 'manual' }],
+    ['internet|8625', { property_address: '4750 LINCOLN BLVD', display_address: '4750 Lincoln Blvd, Marina Del Rey, CA 90292', unit: '382', confidence: 'solida' }],
+    ['gas|4904',      { property_address: '1528 6TH ST',       display_address: '1528 6th St, Santa Monica, CA 90401',        unit: '209', confidence: 'manual' }],
   ]);
 });
 
@@ -74,16 +74,20 @@ describe('idFactura', () => {
 });
 
 describe('resolverPropiedad', () => {
-  it('el registro manda', () => {
+  it('el registro manda, y la factura lleva la direccion de MOSTRAR', () => {
     const p = resolverPropiedad(registry, factura());
-    expect(p).toMatchObject({ address: '4750 LINCOLN BLVD', unit: '382', origen: 'registro' });
+    expect(p).toMatchObject({
+      address: '4750 Lincoln Blvd, Marina Del Rey, CA 90292',   // lo que ve Jake
+      canonical: '4750 LINCOLN BLVD',                           // la clave que agrupa
+      unit: '382', origen: 'registro',
+    });
   });
 
   it('si la cuenta no esta registrada, usa la direccion del propio email', () => {
     const p = resolverPropiedad(registry, factura({
       account_last4: '9999', service_address: '939 S Broadway', unit: 'Apt 508',
     }));
-    expect(p).toMatchObject({ address: '939 S BROADWAY', unit: '508', origen: 'email' });
+    expect(p).toMatchObject({ address: '939 S Broadway', canonical: '939 S BROADWAY', unit: '508', origen: 'email' });
   });
 
   it('sin registro y sin direccion, queda sin asignar para que Jake la resuelva una vez', () => {
@@ -96,7 +100,7 @@ describe('resolverPropiedad', () => {
     // enterarnos, no que el dato cambie solo. Ese cambio silencioso es
     // exactamente lo que hacia el sistema anterior.
     const p = resolverPropiedad(registry, factura({ service_address: '1 OTRA CALLE' }));
-    expect(p.address).toBe('4750 LINCOLN BLVD');
+    expect(p.canonical).toBe('4750 LINCOLN BLVD');
     expect(p.discrepancia).toContain('1 OTRA CALLE');
   });
 
@@ -155,7 +159,7 @@ describe('procesarEmail', () => {
     expect(r.billIds).toEqual([55]);
     const [ins] = db.hechas('INSERT INTO utility_bills');
     expect(ins.params[0]).toBe('msg-1');              // id de Gmail
-    expect(ins.params[2]).toBe('4750 LINCOLN BLVD');  // direccion del registro
+    expect(ins.params[2]).toBe('4750 Lincoln Blvd, Marina Del Rey, CA 90292');  // forma de mostrar
     expect(ins.params[3]).toBe('382');                // unidad del registro
     expect(ins.params[10]).toBe(false);               // no es duplicada
   });
@@ -220,8 +224,9 @@ describe('procesarEmail', () => {
 
     const [reg] = db.hechas('INSERT INTO account_registry');
     expect(reg.params[1]).toBe('7777');
-    expect(reg.params[3]).toBe('620 SANTA MONICA BLVD');
-    expect(reg.params[4]).toBe('510');
+    expect(reg.params[3]).toBe('620 SANTA MONICA BLVD');          // canonica
+    expect(reg.params[4]).toBe('620 Santa Monica Blvd');          // de mostrar
+    expect(reg.params[5]).toBe('510');
     expect(reg.sql).toContain("'provisional'");   // nace sin confirmar
     // y queda disponible en memoria para el resto de la pasada
     expect(registry.get('internet|7777').property_address).toBe('620 SANTA MONICA BLVD');
@@ -285,7 +290,7 @@ describe('lectura real de punta a punta', () => {
 
     const [ins] = db.hechas('INSERT INTO utility_bills');
     expect(ins.params[1]).toBe('gas');
-    expect(ins.params[2]).toBe('1528 6TH ST');   // del registro, no del email
+    expect(ins.params[2]).toBe('1528 6th St, Santa Monica, CA 90401');   // del registro, no del email
     expect(ins.params[3]).toBe('209');
     expect(ins.params[4]).toBe('4904');
     expect(ins.params[5]).toBe(1.28);

@@ -1,4 +1,5 @@
 import pool from '@/lib/db';
+import { normAddress, normUnit } from '@/lib/account-registry';
 
 /**
  * Mapeos cuenta -> propiedad para la pantalla de administracion.
@@ -34,20 +35,23 @@ export async function POST(request) {
     }
 
     // locked: lo que decide una persona no lo pisa ninguna pasada automatica.
+    // Se guardan las dos formas: la canonica agrupa, la escrita se muestra.
     await pool.query(
       `INSERT INTO account_registry
-         (utility_type, account_last4, provider, property_address, unit,
+         (utility_type, account_last4, provider, property_address, display_address, unit,
           confidence, locked, bills_seen, notes, first_seen_at, last_seen_at)
-       VALUES ($1, $2, $3, $4, $5, 'manual', true, 0, $6, now(), now())
+       VALUES ($1, $2, $3, $4, $5, $6, 'manual', true, 0, $7, now(), now())
        ON CONFLICT (utility_type, account_last4) DO UPDATE
          SET provider         = EXCLUDED.provider,
              property_address = EXCLUDED.property_address,
+             display_address  = EXCLUDED.display_address,
              unit             = EXCLUDED.unit,
              confidence       = 'manual',
              locked           = true,
              notes            = EXCLUDED.notes,
              updated_at       = now()`,
-      [utility_type, account_last4, provider || null, property_address, unit || null,
+      [utility_type, account_last4, provider || null,
+       normAddress(property_address), property_address, normUnit(unit),
        `Asignada a mano desde administracion el ${new Date().toISOString().slice(0, 10)}.`]
     );
 

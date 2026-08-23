@@ -1,6 +1,7 @@
 import pool from '@/lib/db';
 import { autoTagBill } from '@/lib/auto-tag';
 import { matchBill, matchBatch } from '@/lib/qb-match';
+import { normAddress, normUnit } from '@/lib/account-registry';
 
 export async function PATCH(req, { params }) {
   try {
@@ -39,20 +40,23 @@ export async function PATCH(req, { params }) {
     if (bill.account_last4 && bill.utility_type) {
       const provider = (bill.email_from || '').match(/<([^>]+)>/)?.[1] || bill.email_from || null;
       try {
+        // Dos formas: la canonica agrupa, la que escribio la persona se muestra.
         await pool.query(`
           INSERT INTO account_registry
-            (utility_type, account_last4, provider, property_address, unit,
+            (utility_type, account_last4, provider, property_address, display_address, unit,
              confidence, locked, bills_seen, notes, first_seen_at, last_seen_at)
-          VALUES ($1, $2, $3, $4, $5, 'manual', true, 1, $6, now(), now())
+          VALUES ($1, $2, $3, $4, $5, $6, 'manual', true, 1, $7, now(), now())
           ON CONFLICT (utility_type, account_last4) DO UPDATE SET
             provider         = EXCLUDED.provider,
             property_address = EXCLUDED.property_address,
+            display_address  = EXCLUDED.display_address,
             unit             = EXCLUDED.unit,
             confidence       = 'manual',
             locked           = true,
             notes            = EXCLUDED.notes,
             updated_at       = now()
-        `, [bill.utility_type, bill.account_last4, provider, bill.property_address, bill.unit,
+        `, [bill.utility_type, bill.account_last4, provider,
+            normAddress(bill.property_address), bill.property_address, normUnit(bill.unit),
             `Asignada a mano desde el dashboard el ${new Date().toISOString().slice(0, 10)}.`]);
 
         const bulk = await pool.query(`

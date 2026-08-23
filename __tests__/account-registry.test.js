@@ -1,7 +1,65 @@
 import { describe, it, expect } from 'vitest';
 import {
   normAddress, normUnit, accountKey, resolveAccount, loadRegistry, CONFIABLES,
+  pickDisplayAddress,
 } from '../lib/account-registry.js';
+
+// Estas 62 grafias son las que habia de verdad en la base para 30 propiedades.
+// Jake reporto en su revision de julio que el dashboard le mostraba la misma
+// propiedad partida en varios grupos, y por eso los totales no cuadraban.
+describe('una propiedad, una sola clave', () => {
+  const mismaCalle = [
+    ['1420 5TH ST', ['1420 5th St, Santa Monica, CA 90401', '1420 5TH ST']],
+    ['439 W 51ST ST', ['439 West 51st Street, New York, NY 10019', '439 W 51st St, New York, NY 10019', '439 WEST 51ST ST']],
+    ['7141 SANTA MONICA BLVD', ['7141 Santa Monica Blvd W Hollywood CA 90046', '7141 Santa Monica Blvd, West Hollywood, CA 90046']],
+    ['4241 REDWOOD AVE', ['4241 Redwood Avenue Los Angeles CA, 90066', '4241 Redwood Ave, Los Angeles, CA 90066']],
+    ['4250 GLENCOE AVE', ['4250 Glencoe Ave Marina del Rey CA 90292']],
+    ['6677 SANTA MONICA BLVD', ['6677 Santa Monica Blvd, Los Angeles CA 90038', '6677 Santa Monica Blvd, Los Angeles, CA 90038', '6677 SANTA MONICA BLVD']],
+  ];
+
+  for (const [canonica, grafias] of mismaCalle) {
+    it(`todas las formas de "${canonica}" dan la misma clave`, () => {
+      for (const g of grafias) expect(normAddress(g)).toBe(canonica);
+    });
+  }
+
+  it('no confunde el "ST" de Street con un estado de dos letras', () => {
+    // "620 SANTA MONICA BLVD" tampoco puede perder su nombre por contener
+    // el nombre de una ciudad.
+    expect(normAddress('1548 6th St')).toBe('1548 6TH ST');
+    expect(normAddress('620 Santa Monica Blvd, Santa Monica, CA 90401')).toBe('620 SANTA MONICA BLVD');
+  });
+});
+
+describe('pickDisplayAddress', () => {
+  it('prefiere la direccion completa y bien puntuada', () => {
+    expect(pickDisplayAddress([
+      { text: '2200 COLORADO AVE', count: 12 },
+      { text: '2200 Colorado Ave, Santa Monica, CA 90404', count: 58 },
+    ])).toBe('2200 Colorado Ave, Santa Monica, CA 90404');
+  });
+
+  it('dos comas ganan a una, aunque la mal puntuada se repita mas', () => {
+    expect(pickDisplayAddress([
+      { text: '4241 Redwood Avenue Los Angeles CA, 90066', count: 7 },
+      { text: '4241 Redwood Ave, Los Angeles, CA 90066', count: 1 },
+    ])).toBe('4241 Redwood Ave, Los Angeles, CA 90066');
+  });
+
+  it('conserva el tipo de via: "175 W 107th St" gana a "175 W 107th"', () => {
+    expect(pickDisplayAddress([
+      { text: '175 W 107th, New York, NY 10025', count: 17 },
+      { text: '175 W 107th St, New York, NY 10025', count: 8 },
+    ])).toBe('175 W 107th St, New York, NY 10025');
+  });
+
+  it('si solo hay mayusculas, al menos elige la de mejor lectura', () => {
+    expect(pickDisplayAddress([
+      { text: '2614 VOORHEES AVE', count: 4 },
+      { text: '2614 Voorhees Ave', count: 4 },
+    ])).toBe('2614 Voorhees Ave');
+  });
+});
 
 describe('normAddress', () => {
   it('se queda con la calle y unifica abreviaturas', () => {
