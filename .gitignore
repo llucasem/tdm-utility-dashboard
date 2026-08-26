@@ -59,3 +59,6 @@ account-registry-propuesto.json
 
 # Scripts temporales de analisis
 _tmp*.mjs
+
+# Auditoria de facturas sin pago (datos de cliente)
+audit-unmatched.json
