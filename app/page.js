@@ -24,6 +24,10 @@ export default function Dashboard() {
   const [properties,       setProperties]       = useState([]);
   const [loading,          setLoading]          = useState(true);
   const [monthIndex,       setMonthIndex]       = useState(() => new Date().getMonth());
+  // 'bill' = mes de factura (Devengo, que se debe) · 'paid' = mes de pago
+  // (Caja, el cierre de Jake). Ver lib/bill-view.js.
+  const [monthMode,        setMonthMode]        = useState('bill');
+  const [showUnpaid,       setShowUnpaid]       = useState(false);
   const [year,             setYear]             = useState(() => new Date().getFullYear());
   const [search,           setSearch]           = useState('');
   const [selectedBill,     setSelectedBill]     = useState(null);
@@ -158,8 +162,18 @@ export default function Dashboard() {
   // statements which are not per-unit and shouldn't appear in the matrix.
   const UTILITY_TYPES = ['electricity', 'internet', 'gas', 'water'];
   const utilityBills  = bills.filter(b => UTILITY_TYPES.includes(b.type));
-  const monthBills     = utilityBills.filter(b => b.dueMonth === monthIndex && b.dueYear === year);
-  const prevMonthBills = utilityBills.filter(b => b.dueMonth === prevMonthIndex && b.dueYear === prevYear);
+  const inMonth = (b, mIdx, yr) => monthMode === 'paid'
+    ? (b.paidMonth === mIdx && b.paidYear === yr)
+    : (b.dueMonth === mIdx && b.dueYear === yr);
+  const monthBills     = utilityBills.filter(b => inMonth(b, monthIndex, year));
+  const prevMonthBills = utilityBills.filter(b => inMonth(b, prevMonthIndex, prevYear));
+  // En modo Caja una factura sin pago casado no cae en NINGUN mes. No puede
+  // desaparecer en silencio (ahi es donde vive la deuda de Maxella): se
+  // ensena aparte, siempre visible.
+  const unpaidBills = monthMode === 'paid'
+    ? utilityBills.filter(b => !b.paidDate && b.status !== 'paid')
+    : [];
+  const unpaidTotal = unpaidBills.reduce((s2, b) => s2 + b.amount, 0);
 
   const monthPayments     = rentPayments.filter(p => p.month === monthIndex && p.year === year);
   const prevMonthPayments = rentPayments.filter(p => p.month === prevMonthIndex && p.year === prevYear);
@@ -179,7 +193,8 @@ export default function Dashboard() {
   }
 
   const term = search.trim().toLowerCase();
-  const filtered = monthBills.filter(b =>
+  const tableBills = (monthMode === 'paid' && showUnpaid) ? unpaidBills : monthBills;
+  const filtered = tableBills.filter(b =>
     searchMatches(term, [b.property, b.unit], b.amount)
   );
   const filteredPayments = monthPayments.filter(p =>
@@ -214,7 +229,20 @@ export default function Dashboard() {
             onNext={nextMonth}
             search={search}
             onSearch={setSearch}
+            mode={monthMode}
+            onMode={(m) => { setMonthMode(m); setShowUnpaid(false); }}
           />
+          {monthMode === 'paid' && unpaidBills.length > 0 && (
+            <div className="unpaid-strip">
+              <span className="unpaid-text">
+                <strong>{unpaidBills.length} bills without a matched payment</strong>
+                {' '}· <span className="amt">${unpaidTotal.toFixed(2)}</span> — outside every month in this view
+              </span>
+              <button className="btn" onClick={() => setShowUnpaid(v => !v)}>
+                {showUnpaid ? 'Back to the month' : 'Show them'}
+              </button>
+            </div>
+          )}
           <ExpectedPanel
             monthIndex={monthIndex}
             year={year}

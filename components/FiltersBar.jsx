@@ -2,6 +2,7 @@ import { MONTHS } from '@/lib/constants';
 
 export default function FiltersBar({
   monthIndex, year, onPrev, onNext, search, onSearch,
+  mode, onMode,
   placeholder = 'Search by property, address or amount (e.g. 61.25)…',
 }) {
   return (
@@ -11,6 +12,23 @@ export default function FiltersBar({
         <span className="month-label">{MONTHS[monthIndex]} {year}</span>
         <button className="nav-btn" onClick={onNext} aria-label="Next month">›</button>
       </div>
+      {onMode && (
+        /* Los dos ejes de mes que pidio Jake: la factura (que se debe) y el
+           pago (su cierre de caja). El mismo interruptor que trae QuickBooks
+           en sus informes: Accrual / Cash. */
+        <div className="mode-toggle" role="group" aria-label="Group bills by">
+          <button
+            className={mode === 'paid' ? 'mode-btn' : 'mode-btn active'}
+            onClick={() => onMode('bill')}
+            title="Accrual — group by the month the bill arrived (what's owed)"
+          >Bill month</button>
+          <button
+            className={mode === 'paid' ? 'mode-btn active' : 'mode-btn'}
+            onClick={() => onMode('paid')}
+            title="Cash — group by the month the payment left the bank (monthly close)"
+          >Paid month</button>
+        </div>
+      )}
       <input
         className="search-input"
         type="text"
