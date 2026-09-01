@@ -25,8 +25,14 @@ export async function GET() {
            SELECT 1 FROM account_registry ar
            WHERE ar.utility_type  = utility_bills.utility_type
              AND ar.account_last4 = utility_bills.account_last4
-             AND ar.property_address IS NOT NULL
-             AND ar.confidence IN ('solida', 'mayoria', 'manual')
+             AND (
+               (ar.property_address IS NOT NULL
+                 AND ar.confidence IN ('solida', 'mayoria', 'manual'))
+               -- Una fila locked sin propiedad significa que una persona ya
+               -- decidio sobre esta cuenta (p.ej. "inactiva", Jake 19/08/2026
+               -- sobre ConEd ····0121). No volver a preguntar.
+               OR ar.locked
+             )
          )
        GROUP BY utility_type, account_last4
        ORDER BY utility_type, account_last4`
