@@ -45,7 +45,10 @@ export async function GET(request) {
         COALESCE(SUM(amount_due) FILTER (WHERE qb_tag_status = 'tagged'), 0)::float  AS tagged_amount
       FROM utility_bills
       WHERE amount_due IS NOT NULL AND amount_due > 0
-        AND due_date >= $1 AND due_date <= $2
+        AND email_received_at >= $1::date AND email_received_at < ($2::date + 1)
+        -- Regla del proyecto: la fecha de una factura es email_received_at,
+        -- NUNCA due_date. Este informe la violaba y media un mes distinto al
+        -- del dashboard (tercer eje de fecha, hallado en el /roast).
     `, [monthStart, monthEnd]);
 
     const stats = billsRes.rows[0];
@@ -55,7 +58,10 @@ export async function GET(request) {
       SELECT utility_type, COUNT(*)::int AS count, SUM(amount_due)::float AS amount
       FROM utility_bills
       WHERE amount_due IS NOT NULL AND amount_due > 0
-        AND due_date >= $1 AND due_date <= $2
+        AND email_received_at >= $1::date AND email_received_at < ($2::date + 1)
+        -- Regla del proyecto: la fecha de una factura es email_received_at,
+        -- NUNCA due_date. Este informe la violaba y media un mes distinto al
+        -- del dashboard (tercer eje de fecha, hallado en el /roast).
       GROUP BY utility_type
       ORDER BY count DESC
     `, [monthStart, monthEnd]);

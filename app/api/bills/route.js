@@ -10,8 +10,24 @@ export async function GET() {
               amount_due, due_date, email_received_at, email_subject, status, source,
               qb_tag_status, qb_purchase_id, qb_class_id, qb_tagged_at,
               qb_match_status, qb_match_count, qb_match_data, qb_matched_at,
-              is_anomaly, anomaly_baseline, anomaly_ratio
+              is_anomaly, anomaly_baseline, anomaly_ratio,
+              pay.pay_date, pay.pay_amount, pay.pay_count, pay.pay_items
        FROM utility_bills
+       LEFT JOIN LATERAL (
+         -- El pago DERIVADO de payments/bill_payments (paso 3): el hecho vive
+         -- alli; esto es solo la vista agregada por factura.
+         SELECT MIN(p.paid_date)                                    AS pay_date,
+                SUM(COALESCE(bp.allocated_amount, p.amount))        AS pay_amount,
+                COUNT(*)::int                                       AS pay_count,
+                jsonb_agg(jsonb_build_object(
+                  'qbId', p.qb_purchase_id, 'date', p.paid_date,
+                  'amount', COALESCE(bp.allocated_amount, p.amount),
+                  'payee', p.payee, 'source', bp.source, 'locked', bp.locked
+                ) ORDER BY p.paid_date)                             AS pay_items
+           FROM bill_payments bp
+           JOIN payments p ON p.id = bp.payment_id
+          WHERE bp.bill_id = utility_bills.id
+       ) pay ON true
        WHERE amount_due IS NOT NULL AND amount_due > 0
          AND NOT is_duplicate
        ORDER BY email_received_at DESC NULLS LAST, created_at DESC`

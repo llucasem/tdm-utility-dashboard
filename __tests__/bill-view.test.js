@@ -21,6 +21,31 @@ describe('mapBillRow — eje de factura (Devengo)', () => {
   });
 });
 
+describe('mapBillRow — pago derivado de payments/bill_payments', () => {
+  it('prefiere las tablas nuevas sobre el JSON del match', () => {
+    const b = mapBillRow(fila({
+      qb_match_status: 'matched',
+      qb_match_data: [{ id: '21927', date: '2026-07-01', amount: 100 }],  // JSON viejo
+      pay_date: new Date(2026, 6, 6),   // 6 de julio, medianoche LOCAL (asi lo entrega pg)
+      pay_amount: '136.21',
+      pay_items: [{ qbId: '21927', date: '2026-07-06', amount: 136.21 }],
+    }));
+    expect(b.paidDate).toBe('2026-07-06');   // NO 2026-07-05: sin resbalon de huso
+    expect(b.paidAmount).toBe(136.21);
+    expect(b.payments).toHaveLength(1);
+  });
+
+  it('sin fila en payments cae al JSON del match (reserva)', () => {
+    const b = mapBillRow(fila({
+      qb_match_status: 'matched',
+      qb_match_data: [{ id: 'x', date: '2026-07-06', amount: 42 }],
+    }));
+    expect(b.paidDate).toBe('2026-07-06');
+    expect(b.paidAmount).toBe(42);
+    expect(b.payments).toEqual([]);
+  });
+});
+
 describe('mapBillRow — eje de pago (Caja)', () => {
   it('saca la fecha de pago del match de QuickBooks', () => {
     // El caso literal de la revision de julio de Jake: factura de junio

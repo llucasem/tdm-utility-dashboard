@@ -1,6 +1,37 @@
+import { useState, useEffect } from 'react';
 import { fmt } from '@/lib/utils';
 
-export default function BillDetailModal({ bill, onClose, year }) {
+export default function BillDetailModal({ bill, onClose, year, onResolved }) {
+  // Cola de revision (paso 4): para una factura sin pago casado se proponen
+  // los pagos candidatos de QuickBooks y decide una persona. La decision se
+  // guarda manual + locked y no se vuelve a preguntar.
+  const [candidates, setCandidates] = useState(null);
+  const [assigning,  setAssigning]  = useState(null);
+  const needsReview = bill && (bill.qbMatchStatus === 'not_found' || bill.qbMatchStatus === 'ambiguous');
+
+  useEffect(() => {
+    setCandidates(null);
+    if (!needsReview) return;
+    let alive = true;
+    fetch(`/api/review-queue?billId=${bill.id}`)
+      .then(r => r.json())
+      .then(d => { if (alive) setCandidates(d.ok ? d.candidates : []); })
+      .catch(() => { if (alive) setCandidates([]); });
+    return () => { alive = false; };
+  }, [bill?.id, needsReview]);
+
+  const assign = async (paymentId) => {
+    setAssigning(paymentId);
+    try {
+      const r = await fetch('/api/review-queue', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ billId: bill.id, paymentId }),
+      });
+      const d = await r.json();
+      if (d.ok && onResolved) onResolved();
+    } finally { setAssigning(null); }
+  };
+
   return (
     <div
       className={`overlay ${bill ? 'show' : ''}`}
@@ -77,6 +108,47 @@ export default function BillDetailModal({ bill, onClose, year }) {
                   </ul>
                 </>
               )}
+            </div>
+          )}
+
+          {needsReview && candidates && candidates.length > 0 && (
+            <div className="qb-match-block">
+              <label>Possible payments — pick the right one, it sticks</label>
+              <ul className="qb-match-list">
+                {candidates.map(c => (
+                  <li key={c.id} title={c.razones.join(' · ')}>
+                    <span className="qb-match-date">{c.paid_date}</span>
+                    <span className="qb-match-amount">{fmt(Number(c.amount))}</span>
+                    <span className="qb-match-payee">{c.qb_class_name || c.payee || '—'}</span>
+                    <button
+                      className="btn candidate-btn"
+                      disabled={assigning !== null}
+                      onClick={() => assign(c.id)}
+                    >{assigning === c.id ? 'Saving…' : 'This one'}</button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {(bill.payments || []).length > 0 && (
+            <div className="qb-match-block">
+              <label>Receipts</label>
+              <ul className="qb-match-list">
+                {bill.payments.map(p => (
+                  <li key={p.qbId}>
+                    <span className="qb-match-date">{p.date}</span>
+                    <span className="qb-match-amount">{fmt(Number(p.amount))}</span>
+                    <span className="qb-match-payee">{p.payee || '—'}</span>
+                    <a
+                      className="qb-receipt-link"
+                      href={`https://qbo.intuit.com/app/expense?txnId=${p.qbId}`}
+                      target="_blank" rel="noopener noreferrer"
+                      title="Open this transaction in QuickBooks"
+                    >QuickBooks →</a>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 

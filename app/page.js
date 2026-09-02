@@ -281,6 +281,7 @@ export default function Dashboard() {
         bill={selectedBill}
         onClose={() => setSelectedBill(null)}
         year={year}
+        onResolved={() => { setSelectedBill(null); fetchBills(); showToast('Payment assigned — locked in'); }}
       />
       <AddBillModal
         open={addOpen}

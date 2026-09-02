@@ -49,17 +49,6 @@ function TagBadge({ status }) {
   return null;
 }
 
-function AnomalyBadge({ bill }) {
-  if (!bill.isAnomaly) return null;
-  const pct = bill.anomalyRatio ? Math.round((bill.anomalyRatio - 1) * 100) : 0;
-  const baseline = bill.anomalyBaseline ? bill.anomalyBaseline.toFixed(2) : '—';
-  return (
-    <span className="anomaly-badge" title={`+${pct}% above the 6-month average ($${baseline}). Possible leak or billing error.`}>
-      ⚡
-    </span>
-  );
-}
-
 export default function BillsTable({ filtered, onSelectBill, onAssignBill }) {
   // Separate mapped vs unmapped bills
   const mapped   = filtered.filter(isMapped);
@@ -160,13 +149,19 @@ export default function BillsTable({ filtered, onSelectBill, onAssignBill }) {
                         >
                           <span className="matrix-cell-amount">
                             {fmt(bill.amount)}
-                            <AnomalyBadge bill={bill} />
                             <MatchBadge bill={bill} />
                             <TagBadge status={bill.qbTagStatus} />
                           </span>
                           <span className="matrix-cell-account">
                             {bill.source === 'qb' ? 'via QuickBooks' : `·····${bill.account}`}
                           </span>
+                          {bill.paidAmount != null ? (
+                            <span className="matrix-cell-paid">
+                              paid {fmt(bill.paidAmount)} · {bill.paidLabel}
+                            </span>
+                          ) : bill.status !== 'paid' && (
+                            <span className="matrix-cell-unpaid">unpaid</span>
+                          )}
                         </span>
                       ))}
                     </span>
