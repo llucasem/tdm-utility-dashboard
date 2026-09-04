@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { MONTHS } from '@/lib/constants';
 import TopBar               from '@/components/TopBar';
 import ViewTabs             from '@/components/ViewTabs';
 import StatsRow              from '@/components/StatsRow';
@@ -167,11 +168,19 @@ export default function Dashboard() {
     : (b.dueMonth === mIdx && b.dueYear === yr);
   const monthBills     = utilityBills.filter(b => inMonth(b, monthIndex, year));
   const prevMonthBills = utilityBills.filter(b => inMonth(b, prevMonthIndex, prevYear));
-  // En modo Caja una factura sin pago casado no cae en NINGUN mes. No puede
-  // desaparecer en silencio (ahi es donde vive la deuda de Maxella): se
-  // ensena aparte, siempre visible.
+  // En modo Caja una factura sin pago casado no cae en NINGUN mes — y el
+  // extracto bancario de QuickBooks tarda 3-4 semanas, asi que el mes EN CURSO
+  // sale casi vacio siempre. Eso descoloco a Jake el 04/09: vio 6 facturas de
+  // agosto cuando hay 75.
+  //
+  // Se ensenan aparte las facturas EMITIDAS en el mes elegido que aun no
+  // tienen pago. Son las que el espera ver, y asi el mes sigue cuadrando.
+  // El criterio es "¿sabemos CUANDO se pago?", no "¿esta pagada?". Una factura
+  // marcada como pagada pero sin fecha (confirmacion de LADWP, fila importada
+  // de QB) tampoco puede colocarse en un mes — y si se excluye aqui desaparece
+  // por los dos lados. Eran 23 de las 75 de agosto.
   const unpaidBills = monthMode === 'paid'
-    ? utilityBills.filter(b => !b.paidDate && b.status !== 'paid')
+    ? utilityBills.filter(b => !b.paidDate && b.dueMonth === monthIndex && b.dueYear === year)
     : [];
   const unpaidTotal = unpaidBills.reduce((s2, b) => s2 + b.amount, 0);
 
@@ -232,15 +241,25 @@ export default function Dashboard() {
             mode={monthMode}
             onMode={(m) => { setMonthMode(m); setShowUnpaid(false); }}
           />
-          {monthMode === 'paid' && unpaidBills.length > 0 && (
+          {monthMode === 'paid' && (
             <div className="unpaid-strip">
               <span className="unpaid-text">
-                <strong>{unpaidBills.length} bills without a matched payment</strong>
-                {' '}· <span className="amt">${unpaidTotal.toFixed(2)}</span> — outside every month in this view
+                {unpaidBills.length > 0 ? (
+                  <>
+                    Showing bills <strong>paid</strong> in {MONTHS[monthIndex]}.
+                    {' '}<strong>{unpaidBills.length} more were billed in {MONTHS[monthIndex]}</strong>
+                    {' '}(<span className="amt">${unpaidTotal.toFixed(2)}</span>) with no payment date yet —
+                    {' '}QuickBooks' bank feed usually lags 3–4 weeks, so the current month always looks light here.
+                  </>
+                ) : (
+                  <>Showing bills <strong>paid</strong> in {MONTHS[monthIndex]}. Everything billed that month has a payment date.</>
+                )}
               </span>
-              <button className="btn" onClick={() => setShowUnpaid(v => !v)}>
-                {showUnpaid ? 'Back to the month' : 'Show them'}
-              </button>
+              {unpaidBills.length > 0 && (
+                <button className="btn" onClick={() => setShowUnpaid(v => !v)}>
+                  {showUnpaid ? `Back to paid in ${MONTHS[monthIndex]}` : 'Show those'}
+                </button>
+              )}
             </div>
           )}
           <ExpectedPanel

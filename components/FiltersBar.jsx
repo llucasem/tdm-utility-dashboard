@@ -25,7 +25,7 @@ export default function FiltersBar({
           <button
             className={mode === 'paid' ? 'mode-btn active' : 'mode-btn'}
             onClick={() => onMode('paid')}
-            title="Cash — group by the month the payment left the bank (monthly close)"
+            title="Cash — group by the month the payment left the bank. Heads up: the current month always looks light here, because QuickBooks' bank feed lags 3-4 weeks. Bills billed this month with no payment yet are listed right below."
           >Paid month</button>
         </div>
       )}
